@@ -1,0 +1,55 @@
+#+TITLE: Effect of Choice on Bertrand Equilibria in Posted Offer Markets
+#+AUTHOR: Horatio Caine and Michal Staniaszek
+
+* What
+** Effect of Choice on Bertrand Equilibria in Posted Offer Markets
+** Simple posted offer market (General case)
+*** Assume one product, two manufacturers
+*** Assume homogeneous products
+*** Normally, it is assumed that consumers choose cheapest
+*** Theoretical effect is that posted price converges to Marginal Cost (due to manufacturers competing for dominance)
+
+** Our version
+*** Probabilistic choosing between brands (with threshold indicating their reluctance to pay too much)
+*** Multiple products
+*** Many manufacturers
+*** Only one shop - no search cost. Buying something for less but having to go further to do so reduces the utility of the cheaper product. We do not consider this.
+** What are the effects?
+*** Theoretical effect is prices go to Marginal Cost
+*** Does our model reproduce this effect?
+* Definition
+** 'Village', large population
+** Multiple products
+*** 'Essentials' (everybody buys them)
+** Many consumers
+*** Consumer is assumed to be a household
+*** Household income based on a gaussian distribution over population
+*** Different requirements of 'essentials', e.g. larger families require more food - generate via gaussian in the range [0,infinity]
+*** No variation in the number of purchases made daily.
+*** Each customer is loyal to a certain manufacturer.
+*** Customers change loyalty when they purchase more products from a manufacturer which is not their preferred one.
+** Multiple manufacturers
+*** Same village, therefore same production cost (i.e. marginal cost)
+*** Price can change daily
+*** Each aims to increase profit. Manufacturers change price and see what happens. If profit increases, they keep going, if decreases, they do the opposite. Apply upper threshold so as not to 'rip-off' consumers, lower threshold is Marginal Cost
+** Consumer choice function
+*** If your preferred manufacturer's product is the cheapest, always buy it. Otherwise, the product is chosen based on the difference in price between your preferred manufacturer's product and the cheapest product.
+*** Consumers mostly choose cheapest, but sometimes don't
+*** We will try different choice functions which modify this.
+**** Always buy cheapest
+**** E.g. Richer consumers more likely to buy more expensive
+**** E.g. Inverse probability based on price (i.e. probability of buying decreases as price increases)
+**** E.g. Always buy cheapest but consumers 'treat themselves' occasionally
+
+* Simulation
+** Show price from each manufacturer (maybe graph)
+** Show profit of each manufacturer (maybe graph)
+** Large population/many products/many manufacturers competing
+
+* Validation
+** Expect to see race to the bottom with prices in simple scenario
+** Removing competitors causes selfish price increases
+** Adding competitors doesn't decrease prices
+** Consumer choice function can keep prices from decreasing to Marginal Cost
+** Not sure specifically how different choice functions will affect prices, this is what we'd like to see
+
