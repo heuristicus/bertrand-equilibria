@@ -1,30 +1,19 @@
-% Created 2013-02-21 Thu 20:46
+% Created 2013-02-21 Thu 21:11
 \documentclass[11pt]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage{fixltx2e}
 \usepackage{graphicx}
 \usepackage{longtable}
 \usepackage{float}
 \usepackage{wrapfig}
 \usepackage{soul}
-\usepackage{textcomp}
-\usepackage{marvosym}
-\usepackage{wasysym}
-\usepackage{latexsym}
 \usepackage{amssymb}
 \usepackage{hyperref}
-\tolerance=1000
 \usepackage{fullpage}
-\providecommand{\alert}[1]{\textbf{#1}}
 
-\title{Effect of Choice on Bertrand Equilibria in Posted Offer Markets}
+\title{Effect of Choice and Loyalty on Bertrand Equilibria in Posted Offer Markets}
 \author{Horatio Caine and Michal Staniaszek}
-\date{\today}
-\hypersetup{
-  pdfkeywords={},
-  pdfsubject={},
-  pdfcreator={Emacs Org-mode version 7.8.11}}
+\date{21 February 2013}
 
 \begin{document}
 
@@ -35,29 +24,32 @@
 \label{sec-1}
 
 \begin{itemize}
-\item Effect of Choice on Bertrand Equilibria in Posted Offer Markets
+\item Effect of Choice and Loyalty on Bertrand Equilibria in Posted Offer Markets
 \item Simple posted offer market (General case)
+
 \begin{itemize}
 \item Assume one product, two manufacturers
 \item Assume homogeneous products
 \item Normally, it is assumed that consumers choose cheapest
-\item Theoretical effect is that posted price converges to Marginal Cost (due to manufacturers competing for dominance)
-\end{itemize}
+\item Theoretical effect is that posted price converges to Marginal Cost (due to manufacturers competing for profits)
 \end{itemize}
 
-\begin{itemize}
 \item Our version
+
 \begin{itemize}
-\item Probabilistic choosing between brands (with threshold indicating their reluctance to pay too much)
+\item Probabilistic choosing between brands (with threshold indicating reluctance to pay too much)
 \item Multiple products
 \item Many manufacturers
-\item Only one shop - no search cost. Buying something for less but having to go further to do so reduces the utility of the cheaper product. We do not consider this.
+\item Only one shop - no search cost for consumers (standard assumption in Economics)
 \end{itemize}
+
 \item What are the effects?
+
 \begin{itemize}
-\item Theoretical effect is prices go to Marginal Cost
+\item Theoretical effect is prices converge to Marginal Cost
 \item Does our model reproduce this effect?
 \end{itemize}
+
 \end{itemize}
 \section{Definition}
 \label{sec-2}
@@ -65,28 +57,36 @@
 \begin{itemize}
 \item `Village', large population
 \item Multiple products
+
 \begin{itemize}
 \item `Essentials' (everybody buys them)
 \end{itemize}
+
 \item Many consumers
+
 \begin{itemize}
 \item Consumer is assumed to be a household
 \item Household income based on a gaussian distribution over population
 \item Different requirements of `essentials', e.g. larger families require more food - generate via gaussian in the range [0,infinity]
-\item No variation in the number of purchases made daily.
-\item Each customer is loyal to a certain manufacturer.
-\item Customers change loyalty when they purchase more products from a manufacturer which is not their preferred one.
+\item No variation in the number of purchases made daily
+\item Each customer attempts to stay loyal to one manufacturer
+\item Customers change loyalty when they purchase more products from a manufacturer which is not their preferred one
 \end{itemize}
+
 \item Multiple manufacturers
+
 \begin{itemize}
 \item Same village, therefore same production cost (i.e. marginal cost)
 \item Price can change daily
 \item Each aims to increase profit. Manufacturers change price and see what happens. If profit increases, they keep going, if decreases, they do the opposite. Apply upper threshold so as not to `rip-off' consumers, lower threshold is Marginal Cost
 \end{itemize}
+
 \item Consumer choice function
+
 \begin{itemize}
-\item If your preferred manufacturer's product is the cheapest, always buy it. Otherwise, the product is chosen based on the difference in price between your preferred manufacturer's product and the cheapest product. Consumers become more likely to switch to a different manufacturer the greater the price difference.
+\item If the preferred manufacturer's product is the cheapest, always buy it. Otherwise, the product is chosen proportionally to the difference in price between the preferred manufacturer's product and the cheapest product. Consumers become more likely to switch to a different manufacturer the greater the price difference
 \end{itemize}
+
 \end{itemize}
 \section{Simulation}
 \label{sec-3}
@@ -101,10 +101,10 @@
 
 \begin{itemize}
 \item Expect to see race to the bottom with prices in simple scenario
-\item Removing competitors causes selfish price increases
+\item Removing competitors causes greedy price increases
 \item Adding competitors doesn't decrease prices
-\item See how consumer loyalty changes over time - in the end, all consumers should be loyal to the company with the cheapest products
-\item See how much switching is being done between manufacturers. There should be a lot of switching at the start due to prices varying a lot, but as equilibrium is approached this should
+\item See how consumer loyalty changes over time. We predict that in the end, consumers become loyal to the company that became cheapest first
+\item See how much switching is being done between manufacturers. We predict that there will be a lot of switching of loyalty at the start due to high price variation, but as equilibrium is approached this should become minimal
 \end{itemize}
 
 \end{document}
