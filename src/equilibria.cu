@@ -28,12 +28,69 @@ typedef struct
     product** products;
 } manufacturer;
 
+// First dimension is product ID
+// Second dimension is manufacturer ID
+// Price is in pence
+int** price; // 2D array
+
+// First dimension is product ID
+// Second dimension is consumer ID
+// Consumption is units of product consumed per day
+int** consumption; // 2D array
+
+// Array mapping consumer ID to income in pence per day
+int* income;
+
+// Array mapping consumer ID to manufacturer ID
+// Showing which manufacturer this consumer currently prefers
+int* loyalty; 
+
+// Arrays mapping manufacturer ID to profit on each day
+typedef struct
+{
+  int* two_days_ago;
+  int* yesterday;
+  int* today;
+} profits;
 
 
+// Rand*MC*3 (roughly)
+void init_prices() { // Mr Michalewicz
+}
 
-//__device__ float d_avg_of_nine(float* data_in, unsigned int x, 
-//		  unsigned int y, unsigned int width) {
-//}
+// Uniformly distributed
+void init_loyalty() { // Mr Michalewicz
+}
+
+// Gaussian over population
+void init_income() { // Mr Michalewicz
+}
+
+// Get the manufacturer ID fom which the consumer chooses to 
+// purchase the given product
+__device__ int consumer_choice(int consumer_id, int product_id) {
+}
+
+// Get tomorrow's price for the given product ID
+__device__ int price_response(int manufacturer_id, int product_id) {
+}
+
+__global__ void equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit) {
+}
+
+
+// Get the manufacturer ID fom which the consumer chooses to 
+// purchase the given product
+int host_consumer_choice(int consumer_id, int product_id) { // Mr Caine
+}
+
+// Get tomorrow's price for the given product ID
+int host_price_response(int manufacturer_id, int product_id) { // Mr Caine
+}
+
+void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit) {
+}
+
 
 
 
