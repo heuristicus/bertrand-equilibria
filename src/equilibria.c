@@ -11,10 +11,13 @@
 #define NUM_MANUFACTURERS 2
 #define NUM_CONSUMERS 50
 #define MAX_MARGINAL 250
+#define BASE_INCOME 20000
 
 const char* products[] = {"milk", "bread", "toilet_paper", "butter", "jam", "cheese"};
 
 int select_loyalty();
+double gaussrand();
+double positive_gaussrand();
 
 typedef struct
 {
@@ -70,21 +73,19 @@ typedef struct
 void init_marginal()
 {
     marginal_cost = malloc((sizeof(products)/sizeof(char*)) * sizeof(int));
-    srand(time(NULL));
 
     int i;
     
     for (i = 0; i < sizeof(products)/sizeof(char*); ++i) {
-	float rval = rand();
-	printf("rval is %f\n", rval);
-	marginal_cost[i] = (int)(rval/INT_MAX * MAX_MARGINAL);
+	float rval = (float)rand()/RAND_MAX;
+	marginal_cost[i] = (int)(rval * MAX_MARGINAL);
 	printf("Marginal cost for %s is %d.\n", products[i], marginal_cost[i]);
     }
-    
 }
 
 // Rand*MC*3 (roughly)
-void init_prices() { // Mr Michalewicz
+void init_prices()
+{
     int i, j;
 
     price = malloc(sizeof(products)/sizeof(char*) * sizeof(int*));
@@ -92,19 +93,30 @@ void init_prices() { // Mr Michalewicz
     for (i = 0; i < sizeof(products)/sizeof(char*); ++i) {
 	price[i] = malloc(NUM_MANUFACTURERS * sizeof(int));
 	for (j = 0; j < NUM_MANUFACTURERS; ++j) {
-	    price[i][j] = (rand()/INT_MAX) * marginal_cost[i] * 3;
+	    float rval = (float)rand()/RAND_MAX;
+	    price[i][j] = marginal_cost[i] + (rval * marginal_cost[i]);
+	    printf("Price for %s from manufacturer %d: %d\n", products[i], j, price[i][j]);
 	}
     }
 }
 
 // Uniformly distributed
-void init_loyalty() { // Mr Michalewicz
+void init_loyalty()
+{
     loyalty = malloc(NUM_CONSUMERS * sizeof(int));
     
     int i;
+
+    int* counts = malloc(NUM_MANUFACTURERS * sizeof(int));
     
     for (i = 0; i < NUM_CONSUMERS; ++i) {
 	loyalty[i] = select_loyalty();
+//	printf("Customer %d loyal to manufacturer %d\n", i, loyalty[i]);
+	counts[loyalty[i]]++;
+    }
+
+    for (i = 0; i < NUM_MANUFACTURERS; ++i) {
+	printf("Manufacturer %d has %d loyal customers.\n", i, counts[i]);
     }
 }
 
@@ -112,18 +124,71 @@ int select_loyalty()
 {
     int i;
 
-//    int rval = rand()/INT_MAX;
-    
+    float rval = (float)rand()/RAND_MAX;
+
+    float split = 1.0/NUM_MANUFACTURERS;
     for (i = 0; i < NUM_MANUFACTURERS; ++i) {
-	
+	if (rval < split * (i + 1))
+	    return i;
+    }
+    return i;
+}
+
+/*
+ * Gaussian over population. Currently generates values using a gaussian tail
+ * distribution - there will be a lot of people who have an income around 
+ * the base income, and fewer with higher incomes.
+ */
+void init_income()
+{
+    income = malloc(NUM_CONSUMERS * sizeof(int));
+    
+    int i;
+    for (i = 0; i < NUM_CONSUMERS; ++i) {
+	income[i] = BASE_INCOME * (positive_gaussrand() + 1);
+	printf("Income of household %d: %d\n", i, income[i]);
+    }
+}
+
+/*
+ * Generate a gaussian random value in the interval [0,infinity]
+ */
+double positive_gaussrand()
+{
+    double r;
+    
+    while ((r = gaussrand()) < 0);
+    
+    return r;
+}
+
+// Polar method implementation taken from c-faq.com/lib/gaussian.html
+double gaussrand()
+{
+    static double V1, V2, S;
+    static int phase = 0;
+    double X;
+    
+    if (phase == 0){
+	do {
+	    double U1 = (double)rand()/RAND_MAX;
+	    double U2 = (double)rand()/RAND_MAX;
+	    
+	    V1 = 2 * U1 - 1;
+	    V2 = 2 * U2 - 1;
+	    S = V1 * V1 + V2 * V2;
+	} while (S >= 1 || S == 0);
+	X = V1 * sqrt(-2 * log(S) / S);
+    } else {
+	X = V2 * sqrt(-2 * log(S) / S);
     }
 
-    return 0;
+    phase = 1 - phase;
+    
+    return X;
 }
 
-// Gaussian over population
-void init_income() { // Mr Michalewicz
-}
+
 
 // Get the manufacturer ID fom which the consumer chooses to 
 // purchase the given product
@@ -163,6 +228,15 @@ double sum_array(float* data_in, unsigned int length) {
    Second arg: blocks per grid */
 int main(int argc, char** argv)
 {
+    srand(time(NULL));
+
+    int i;
+    
+    for (i = 0; i < 100; ++i) {
+	printf("%lf\n", positive_gaussrand() + 1);
+    }
+
+
     init_income();
     init_loyalty();
     init_marginal();
