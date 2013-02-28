@@ -8,14 +8,22 @@
 
 #define ITERS 10
 
+// Direction of price for the given manufacturer.
+// Up means prices are increasing, down is decreasing
+#define STRATEGIES 2
+#define STRATEGY_UP 1
+#define STRATEGY_DOWN 2
+
 //#define BLOCK_SIZE 32
 //#define GRID_SIZE 32
 #define NUM_MANUFACTURERS 2
 #define NUM_CONSUMERS 10
 #define MAX_MARGINAL 250
 #define BASE_INCOME 20000
+#define PRICE_INCREMENT 2
 
-const char* products[] = {"milk", "bread", "toilet_paper", "butter", "jam", "cheese"};
+const char* products[] = {"milk", "bread", "toilet_paper", "butter", "bacon", "cheese"};
+int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
 
 int select_loyalty();
 double gaussrand();
@@ -28,8 +36,6 @@ typedef struct
   float price;
   float m_cost;
 } product;
-
-
 
 typedef struct
 {
@@ -73,6 +79,13 @@ typedef struct
   int* today;
 } profits;
 
+profits* profit_history;
+
+// Array mapping manufacturer ID to price strategy 
+// (that is, one of the constants from STRATEGY_UP and _DOWN)
+int* price_strategy;
+
+
 /*
 // Get the manufacturer ID fom which the consumer chooses to 
 // purchase the given product
@@ -86,28 +99,29 @@ __device__ int price_response(int manufacturer_id, int product_id) {
 __global__ void equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit) {
 }
 
-
-// Get the manufacturer ID fom which the consumer chooses to 
-// purchase the given product
-int host_consumer_choice(int consumer_id, int product_id) {
-  
-}
-
-// Get tomorrow's price for the given product ID
-int host_price_response(int manufacturer_id, int product_id) {
-}
-
-void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit) {
-}
 */
+
+void init_strategy() 
+{
+  price_strategy = (int*) malloc(NUM_MANUFACTURERS*sizeof(int));
+  
+  int i;
+  for (i = 0; i < NUM_MANUFACTURERS; i++) 
+  {
+    // Randomly choose int between 1 and num of strategies
+    float randVal = (float)rand()/RAND_MAX;
+    price_strategy[i] = (int)(randVal*STRATEGIES) + 1;
+  }
+}
+
 
 void init_marginal()
 {
-  marginal_cost = (int*) malloc((sizeof(products)/sizeof(char*)) * sizeof(int));
+  marginal_cost = (int*) malloc(NUM_PRODUCTS * sizeof(int));
 
   int i;
     
-  for (i = 0; i < sizeof(products)/sizeof(char*); ++i) {
+  for (i = 0; i < NUM_PRODUCTS; ++i) {
     float rval = (float)rand()/RAND_MAX;
     marginal_cost[i] = (int)(rval * MAX_MARGINAL);
     printf("Marginal cost for %s is %d.\n", products[i], marginal_cost[i]);
@@ -120,9 +134,9 @@ void init_prices()
   int i;
   int j;
 
-  price = (int**) malloc(sizeof(products)/sizeof(char*) * sizeof(int*));
+  price = (int**) malloc(NUM_PRODUCTS * sizeof(int*));
 
-  for (i = 0; i < sizeof(products)/sizeof(char*); ++i) {
+  for (i = 0; i < NUM_PRODUCTS; ++i) {
     price[i] = (int*) malloc(NUM_MANUFACTURERS * sizeof(int));
     for (j = 0; j < NUM_MANUFACTURERS; ++j) {
       float rval = (float)rand()/RAND_MAX;
@@ -180,9 +194,28 @@ void init_income()
   }
 }
 
-/*
- * Generate a gaussian random value in the interval [0,infinity]
- */
+// Initialise last two days of profits with fake values.
+// All profits two days ago are set to 0 and for yesterday 
+// are set to 1. Thus, all profits increase so currently
+// active strategies are kept in place and acted on
+void init_profits() 
+{
+  profit_history = (profits*) malloc(sizeof(profits));
+  profit_history->two_days_ago = (int*) malloc(sizeof(int)*NUM_MANUFACTURERS);
+  profit_history->yesterday = (int*) malloc(sizeof(int)*NUM_MANUFACTURERS);
+  profit_history->today = (int*) malloc(sizeof(int)*NUM_MANUFACTURERS);
+
+  int man;
+  for (man = 0; man < NUM_MANUFACTURERS; ++man)
+  {
+    profit_history->two_days_ago[man] = 0;
+    profit_history->yesterday[man] = 1;
+  }
+}
+
+
+
+/* Generate a gaussian random value in the interval [0,infinity] */
 double positive_gaussrand()
 {
   double r;
@@ -220,13 +253,30 @@ double gaussrand()
 
 // Get the manufacturer ID fom which the consumer chooses to 
 // purchase the given product
-int host_consumer_choice(int consumer_id, int product_id) { // Mr Caine
-    return 0;
+int host_consumer_choice(int consumer_id, int product_id) {
+  return 0;
 }
 
 // Get tomorrow's price for the given product ID
-int host_price_response(int manufacturer_id, int product_id) { // Mr Caine
-    return 0;
+void host_price_response(int manufacturer_id, int product_id) {
+  int current_strategy = price_strategy[manufacturer_id];
+  int profit1 = profit_history->two_days_ago[manufacturer_id];
+  int profit2 = profit_history->yesterday[manufacturer_id];
+
+  // If profit decreased, switch strategy
+  if (profit1 > profit2) 
+  {
+    if (current_strategy == STRATEGY_UP) 
+    {
+      price_strategy[manufacturer_id] = STRATEGY_DOWN;
+    }
+    else
+    {
+      price_strategy[manufacturer_id] = STRATEGY_UP;
+    }
+  }
+
+  price[product_id][manufacturer_id] += PRICE_INCREMENT;
 }
 
 void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit) {
@@ -239,10 +289,17 @@ void copy_array(float* from, float* to, unsigned int size) {
 }
 
 void print_array(float* data_in, unsigned int size) {
-  for (int i=0; i < size; i++) {
+  for (int i=0; i < size-1; i++) {
     printf("%f,", data_in[i]);
   }
-  printf("\n\n");
+  printf("%f\n\n", data_in[size-1]);
+}
+
+void print_int_array(int* data_in, unsigned int size) {
+  for (int i=0; i < size-1; i++) {
+    printf("%d,", data_in[i]);
+  }
+  printf("%d\n\n", data_in[size-1]);
 }
 
 double sum_array(float* data_in, unsigned int length) {
@@ -310,6 +367,16 @@ int main(int argc, char** argv)
   init_marginal();
   init_prices();
 
+  init_strategy();
+  init_profits();
+  printf("Printing two days ago\n");
+  print_int_array(profit_history->two_days_ago, NUM_MANUFACTURERS);
+
+  printf("Printing yesterday\n");
+  print_int_array(profit_history->yesterday, NUM_MANUFACTURERS);
+
+  host_price_response(0,0);
+  
   
 
 
