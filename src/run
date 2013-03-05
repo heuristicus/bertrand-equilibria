@@ -1,1 +1,1 @@
-make && ./bin/release/equilibria 16 16
+make && ./bin/release/equilibria 16 16 $*
