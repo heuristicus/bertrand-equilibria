@@ -10,9 +10,9 @@
 
 // Direction of price for the given manufacturer.
 // Up means prices are increasing, down is decreasing
-#define STRATEGIES 2
-#define STRATEGY_UP 1
-#define STRATEGY_DOWN 2
+#define NUM_STRATEGIES 2
+#define STRATEGY_UP 0
+#define STRATEGY_DOWN 1
 
 //#define BLOCK_SIZE 32
 //#define GRID_SIZE 32
@@ -22,12 +22,25 @@
 #define BASE_INCOME 20000
 #define PRICE_INCREMENT 2
 
+// The gradient/decay rate of the function used to determine
+// fitness for roulette-wheel selection, which is used to
+// find the manufacturer to buy from
+#define LOYALTY_ALPHA 8.0f
+
+// By how much we multiply the score of the preferred manufacturer
+#define LOYALTY_MULTIPLIER 2.0f
+
+// What additional price over the cheapest we are willing to consider.
+// E.g. 0.5 means we never buy products 50% more expensive than cheapest
+#define RIPOFF_MULTIPLIER 1.0f
+
 const char* products[] = {"milk", "bread", "toilet_paper", "butter", "bacon", "cheese"};
 int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
 
 int select_loyalty();
 double gaussrand();
 double positive_gaussrand();
+void print_array(float*, unsigned int);
 
 typedef struct
 {
@@ -101,6 +114,9 @@ __global__ void equilibriate(int** price, int** consumption, int* income, int* l
 
 */
 
+// Each manufacturer has a strategy at a given moment in time.
+// Either they are raising their profits or decreasing them. Here, we initialise
+// these values to random strategies for the first time step
 void init_strategy() 
 {
   price_strategy = (int*) malloc(NUM_MANUFACTURERS*sizeof(int));
@@ -108,9 +124,9 @@ void init_strategy()
   int i;
   for (i = 0; i < NUM_MANUFACTURERS; i++) 
   {
-    // Randomly choose int between 1 and num of strategies
+    // Randomly choose int between 0 and num of strategies-1
     float randVal = (float)rand()/RAND_MAX;
-    price_strategy[i] = (int)(randVal*STRATEGIES) + 1;
+    price_strategy[i] = (int)(randVal*NUM_STRATEGIES);
   }
 }
 
@@ -141,7 +157,7 @@ void init_prices()
     for (j = 0; j < NUM_MANUFACTURERS; ++j) {
       float rval = (float)rand()/RAND_MAX;
       price[i][j] = marginal_cost[i] + (rval * marginal_cost[i]);
-      printf("Price for %s from manufacturer %d: %d\n", products[i], j, price[i][j]);
+      printf("Price for %s (%d) from manufacturer %d: %d\n", products[i], i, j, price[i][j]);
     }
   }
 }
@@ -249,12 +265,67 @@ double gaussrand()
   return X;
 }
 
-
-
 // Get the manufacturer ID fom which the consumer chooses to 
 // purchase the given product
-int host_consumer_choice(int consumer_id, int product_id) {
-  return 0;
+int host_consumer_choice(int consumer_id, int product_id, int cheapest_man) {
+  // If cheapest manufacturer is already preferred, pick that
+  if (loyalty[consumer_id] == cheapest_man) 
+  {
+    printf("Preferred is cheapest. Returning %d\n",cheapest_man);
+    return cheapest_man;
+  }
+  else
+  {
+    float cheapest_price = (float) price[product_id][cheapest_man];
+    float* scores = (float*) malloc(sizeof(float)*NUM_MANUFACTURERS);
+
+    float total_score = 0.0f;
+    
+    for (int man = 0; man < NUM_MANUFACTURERS; man++) 
+    {
+      // equiv. of x in function
+      int price_diff = price[product_id][man] - cheapest_price;
+      float score;
+      if (price_diff > RIPOFF_MULTIPLIER*cheapest_price) 
+      {
+        score = 0;
+      }
+      else
+      {
+        score = cheapest_price/(LOYALTY_ALPHA*price_diff + cheapest_price);
+        total_score += score;
+      }
+
+      if (man == loyalty[consumer_id])
+      {
+        score *= LOYALTY_MULTIPLIER;
+      }
+
+      scores[man] = score;
+    }
+
+    float ran = (float)rand() / RAND_MAX * total_score;
+    float score_so_far = 0.0f;
+
+    printf("Scores array: ");
+    print_array(scores, NUM_MANUFACTURERS);
+    printf("Rand is %.5f\n", ran);
+
+    for (int man = 0; man < NUM_MANUFACTURERS; man++) 
+    {
+      score_so_far += scores[man];
+      if (score_so_far >= ran)
+      {
+        return man;
+      }
+    }
+  }
+  
+  // Should have returned by now, so return -1 to crash or segfault or something
+  fprintf(stderr, "Error! Didn't select anything in roulette wheel selection inside "\
+          "host_consumer_choice. Exiting...\n");
+  exit(1);
+  return -1;
 }
 
 // Get tomorrow's price for the given product ID
@@ -279,6 +350,19 @@ void host_price_response(int manufacturer_id, int product_id) {
   price[product_id][manufacturer_id] += PRICE_INCREMENT;
 }
 
+int get_cheapest_man(int product_id)
+{
+  int cheapest_man = 0;
+  for (int man = 1; man < NUM_MANUFACTURERS; man++)
+  {
+    if (price[product_id][man] < price[product_id][cheapest_man])
+    {
+      cheapest_man = man;
+    }
+  }
+  return cheapest_man;
+}
+
 void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit) {
 }
 
@@ -292,14 +376,14 @@ void print_array(float* data_in, unsigned int size) {
   for (int i=0; i < size-1; i++) {
     printf("%f,", data_in[i]);
   }
-  printf("%f\n\n", data_in[size-1]);
+  printf("%f\n", data_in[size-1]);
 }
 
 void print_int_array(int* data_in, unsigned int size) {
   for (int i=0; i < size-1; i++) {
     printf("%d,", data_in[i]);
   }
-  printf("%d\n\n", data_in[size-1]);
+  printf("%d\n", data_in[size-1]);
 }
 
 double sum_array(float* data_in, unsigned int length) {
@@ -377,8 +461,14 @@ int main(int argc, char** argv)
 
   host_price_response(0,0);
   
+  int product_id = 0;
+  int cheapest_man = get_cheapest_man(product_id);
   
-
+  // Cons, product_id, cheapest  
+  for (int cons = 0; cons < NUM_CONSUMERS; cons++) {
+    int bought_man = host_consumer_choice(cons, product_id, cheapest_man);
+    printf("Cons=%d, Loyalty=%d, Bought_man=%d\n\n",cons, loyalty[cons], bought_man);
+  }
 
 
 
