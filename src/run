@@ -1,1 +1,21 @@
-make && ./bin/release/equilibria 16 16 $*
+#!/bin/bash
+PROFITFILE="logs/profit.dat"
+PRICEFILE="logs/price.dat"
+
+make
+
+# If make was successful, run the program run plot script in the background
+if [ $? -eq 0 ]; then
+    if [ -f $PROFITFILE ]; then
+        rm $PROFITFILE
+        touch $PROFITFILE
+    fi
+    if [ -f $PRICEFILE ]; then
+        rm $PRICEFILE
+        touch $PRICEFILE
+    fi
+
+   ./bin/release/equilibria 16 16 $1 $PROFITFILE $PRICEFILE &
+   sleep 1
+   plot
+fi

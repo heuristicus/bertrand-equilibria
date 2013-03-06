@@ -1,0 +1,20 @@
+#!/bin/bash
+gnuplot plotprice.gnu &
+PRICEPID=$!
+
+gnuplot plotprofit.gnu &
+PROFITPID=$!
+
+# echo "Type 'exit' to exit"
+
+while read line; do
+    if [ "$line" == "exit" ]; then
+        echo "Killing..."
+        kill $PRICEPID
+        kill $PROFITPID
+        exit
+    fi
+done
+
+#read -p "Type 'exit' to exit: "
+

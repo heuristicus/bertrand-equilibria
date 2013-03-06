@@ -316,9 +316,9 @@ int host_consumer_choice(int consumer_id, int product_id, int cheapest_man) {
     float score_so_far = 0.0f;
 
 
-//    printf("Scores array: ");
-//    print_array(scores, NUM_MANUFACTURERS);
-//    printf("Rand is %.5f\n", ran);
+    printf("Scores array: ");
+    print_array(scores, NUM_MANUFACTURERS);
+    printf("Rand is %.5f\n", ran);
 
     for (int man = 0; man < NUM_MANUFACTURERS; man++) 
     {
@@ -415,18 +415,22 @@ void update_loyalties(int** choices, int* loyalties, unsigned int num_consumers,
   }
 }
 
-void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit, int days, char* filename)
+void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit, int days, char* profitFilename, char* priceFilename)
 {
   int day_num;
   int man_id, prod_id, cons_id;
   
-  FILE* fp = fopen(filename, "w");
+  FILE* profitFile = fopen(profitFilename, "w");
+  FILE* priceFile = fopen(priceFilename, "w");
   
   for (day_num = 0; day_num < days; day_num++)
   {
     printf("Old prices (line = product):\n");
     print_2d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
 
+    printf("Strategies (0 is up, 1 is down): \n");
+    print_int_array(price_strategy, NUM_MANUFACTURERS);
+    
     for (man_id = 0; man_id < NUM_MANUFACTURERS; man_id++){
       for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
         host_price_response(man_id, prod_id);
@@ -466,15 +470,18 @@ void host_equilibriate(int** price, int** consumption, int* income, int* loyalty
     print_int_array(loyalty, NUM_CONSUMERS);
     printf("Printing cons choices.\n");
     print_2d_int_array(cons_choices, NUM_CONSUMERS, NUM_MANUFACTURERS);
-    put_plot_line(fp, profit->today, NUM_MANUFACTURERS, day_num);
+    put_plot_line(profitFile, profit->today, NUM_MANUFACTURERS, day_num);
+    
+    int prod_to_print = 0;
+    put_plot_line(priceFile, price[prod_to_print], NUM_MANUFACTURERS, day_num);
     
     // swap the pointers inside the profit struct so that we can overwrite without needing to free
     swap_profit_pointers(profit, NUM_MANUFACTURERS);
-    
 
     printf("A new day dawns.\n\n\n\n\n\n");
   }
-  fclose(fp);
+  fclose(profitFile);
+  fclose(priceFile);
 }
 
 // Writes the given array into the provided file pointer. The x value
@@ -595,14 +602,15 @@ double sum_array(float* data_in, unsigned int length) {
    Second arg: blocks per grid */
 int main(int argc, char** argv)
 {
-  if (argc != 5) {
-    printf("Please input four arguments: threads, blocks, number of days and output filename\n");
+  if (argc != 6) {
+    printf("Please input five arguments: threads, blocks, number of days and output filenames of profit and price files\n");
     exit(1);
   }
   int threadsPerBlock = atoi(argv[1]);
   int blocksPerGrid = atoi(argv[2]);
   int days = atoi(argv[3]);
-  char* filename = argv[4];
+  char* profitFilename = argv[4];
+  char* priceFilename = argv[5];
 
 
   int devID;
@@ -650,7 +658,7 @@ int main(int argc, char** argv)
   print_2d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
   printf("Loyalties:\n");
   print_int_array(loyalty, NUM_CONSUMERS);
-  host_equilibriate(price, consumption, income, loyalty, profit_history, days, filename);
+  host_equilibriate(price, consumption, income, loyalty, profit_history, days, profitFilename, priceFilename);
 
 
 
