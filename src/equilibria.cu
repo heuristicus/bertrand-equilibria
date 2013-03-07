@@ -17,10 +17,13 @@
 //#define BLOCK_SIZE 32
 //#define GRID_SIZE 32
 #define NUM_MANUFACTURERS 2
-#define NUM_CONSUMERS 10
+#define NUM_CONSUMERS 100
 #define MAX_MARGINAL 250
 #define BASE_INCOME 20000
-#define PRICE_INCREMENT 2
+#define PRICE_INCREMENT 5
+// The price of any product cannot exceed this value multiplied by the marginal
+// cost for that product.
+#define MAX_PRICE_MULTIPLIER 5.0f 
 
 // The gradient/decay rate of the function used to determine
 // fitness for roulette-wheel selection, which is used to
@@ -80,6 +83,8 @@ void print_profit_struct(profits* profit, unsigned int num_manufacturers);
 int get_max_ind(int* array, unsigned int size);
 int get_min_ind(int* array, unsigned int size);
 void put_plot_line(FILE* fp, int* arr, unsigned int size, int x);
+void modify_price(int manufacturer_id, int product_id, int strategy);
+int* manufacturer_loyalty_counts(int* loyal_arr, int num_manufacturers, int num_consumers);
 
 // First dimension is product ID
 // Second dimension is manufacturer ID
@@ -87,6 +92,8 @@ void put_plot_line(FILE* fp, int* arr, unsigned int size, int x);
 int** price; // 2D array
 
 int* marginal_cost;
+
+int* max_cost;
 
 // First dimension is product ID
 // Second dimension is consumer ID
@@ -139,9 +146,12 @@ void init_strategy()
 }
 
 
-void init_marginal()
+// Initialises the marginal and maximum costs for each product. The maximum price is
+// some multiple of the marginal cost.
+void init_marginal_and_max()
 {
   marginal_cost = (int*) malloc(NUM_PRODUCTS * sizeof(int));
+  max_cost = (int*) malloc(NUM_PRODUCTS * sizeof(int));
 
   int i;
     
@@ -149,6 +159,7 @@ void init_marginal()
     float rval = (float)rand()/RAND_MAX;
     marginal_cost[i] = (int)(rval * MAX_MARGINAL);
     printf("Marginal cost for %s is %d.\n", products[i], marginal_cost[i]);
+    max_cost[i] = MAX_PRICE_MULTIPLIER * marginal_cost[i];
   }
 }
 
@@ -355,15 +366,31 @@ void host_price_response(int manufacturer_id, int product_id) {
       price_strategy[manufacturer_id] = STRATEGY_UP;
     }
   }
+  else if (profit1 == profit2) {
+    price_strategy[manufacturer_id] = STRATEGY_DOWN;
+  }
 
-  price[product_id][manufacturer_id] += PRICE_INCREMENT;
+  modify_price(manufacturer_id, product_id, price_strategy[manufacturer_id]);
 }
 
+// Modifies the price the manufacturer charges for the given product based on
+// the current strategy. The price can never exceed some multiple of the marginal
+// cost, and can never fall below the marginal cost.
+void modify_price(int manufacturer_id, int product_id, int strategy)
+{
+
+  if (strategy == STRATEGY_UP && price[product_id][manufacturer_id] <= max_cost[product_id] + PRICE_INCREMENT)
+    price[product_id][manufacturer_id] += PRICE_INCREMENT;
+  else if (strategy == STRATEGY_DOWN && price[product_id][manufacturer_id] >= marginal_cost[product_id] - PRICE_INCREMENT)
+    price[product_id][manufacturer_id] -= PRICE_INCREMENT;
+  
+}
+
+// Gets the ID of the manufacturer which has the cheapest product for the given ID.
 int get_cheapest_man(int product_id)
 {
   return get_min_ind(price[product_id], NUM_MANUFACTURERS);
 }
-
 
 // We pass in the array of integers containing which manufacturer each
 // consumer chooses based on the host_consumer_choice function. The return
@@ -420,8 +447,10 @@ void host_equilibriate(int** price, int** consumption, int* income, int* loyalty
   int day_num;
   int man_id, prod_id, cons_id;
   
+  char* ll = "loyalty.txt";
   FILE* profitFile = fopen(profitFilename, "w");
   FILE* priceFile = fopen(priceFilename, "w");
+  FILE* loyalFile = fopen(ll, "w");
   
   for (day_num = 0; day_num < days; day_num++)
   {
@@ -470,18 +499,30 @@ void host_equilibriate(int** price, int** consumption, int* income, int* loyalty
     print_int_array(loyalty, NUM_CONSUMERS);
     printf("Printing cons choices.\n");
     print_2d_int_array(cons_choices, NUM_CONSUMERS, NUM_MANUFACTURERS);
+
     put_plot_line(profitFile, profit->today, NUM_MANUFACTURERS, day_num);
-    
     int prod_to_print = 0;
     put_plot_line(priceFile, price[prod_to_print], NUM_MANUFACTURERS, day_num);
-    
+    int* ct = manufacturer_loyalty_counts(loyalty, NUM_MANUFACTURERS, NUM_CONSUMERS);
+    put_plot_line(loyalFile, ct, NUM_MANUFACTURERS, day_num);
     // swap the pointers inside the profit struct so that we can overwrite without needing to free
     swap_profit_pointers(profit, NUM_MANUFACTURERS);
 
     printf("A new day dawns.\n\n\n\n\n\n");
   }
+
   fclose(profitFile);
   fclose(priceFile);
+  fclose(loyalFile);
+}
+
+int* manufacturer_loyalty_counts(int* loyal_arr, int num_manufacturers, int num_consumers)
+{
+  int* counts = (int*)calloc(num_manufacturers, sizeof(int));
+  for (int consumer_num = 0; consumer_num < num_consumers; consumer_num++){
+    counts[loyal_arr[consumer_num]]++;
+  }
+  return counts;
 }
 
 // Writes the given array into the provided file pointer. The x value
@@ -632,7 +673,7 @@ int main(int argc, char** argv)
 
   init_income();
   init_loyalty();
-  init_marginal();
+  init_marginal_and_max();
   init_prices();
 
   init_strategy();
