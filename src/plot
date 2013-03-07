@@ -5,6 +5,9 @@ PRICEPID=$!
 gnuplot plotprofit.gnu &
 PROFITPID=$!
 
+gnuplot plotloyalty.gnu &
+LOYALTYPID=$!
+
 # echo "Type 'exit' to exit"
 
 while read line; do
@@ -12,6 +15,7 @@ while read line; do
         echo "Killing..."
         kill $PRICEPID
         kill $PROFITPID
+        kill $LOYALTYPID
         exit
     fi
 done

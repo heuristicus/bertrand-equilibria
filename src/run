@@ -1,6 +1,12 @@
 #!/bin/bash
-PROFITFILE="logs/profit.dat"
-PRICEFILE="logs/price.dat"
+LOGDIR=logs
+PROFITFILE=$LOGDIR/profit.dat
+PRICEFILE=$LOGDIR/price.dat
+LOYALTYFILE=$LOGDIR/loyalty.dat
+
+if [ ! -d $LOGDIR ]; then
+    mkdir $LOGDIR
+fi
 
 make
 
@@ -8,14 +14,25 @@ make
 if [ $? -eq 0 ]; then
     if [ -f $PROFITFILE ]; then
         rm $PROFITFILE
-        touch $PROFITFILE
+#        touch $PROFITFILE
     fi
     if [ -f $PRICEFILE ]; then
         rm $PRICEFILE
-        touch $PRICEFILE
+#        touch $PRICEFILE
+    fi
+    if [ -f $LOYALTYFILE ]; then
+        rm $LOYALTYFILE
+#        touch $LOYALTYFILE
     fi
 
-   ./bin/release/equilibria 16 16 $1 $PROFITFILE $PRICEFILE &
+   ./bin/release/equilibria 16 16 $1 $PROFITFILE $PRICEFILE $LOYALTYFILE &
    sleep 1
+   
+   # Wait until all files for plotting exist
+   while [[ ! -f $PROFITFILE  || ! -f $PRICEFILE || ! -f $LOYALTYFILE ]]; do
+       echo "Waiting for plot files..."
+       sleep 1
+   done
+   
    plot
 fi

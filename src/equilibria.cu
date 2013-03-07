@@ -37,7 +37,11 @@
 // E.g. 0.5 means we never buy products 50% more expensive than cheapest
 #define RIPOFF_MULTIPLIER 1.0f
 
-const char* products[] = {"milk", "bread", "toilet_paper", "butter", "bacon", "cheese"};
+// Whether the consumers choose which product to buy based on loyalty.
+// Otherwise, they just pick the cheapest
+#define LOYALTY_ENABLED 1
+
+const char* products[] = {"milk"};//, "bread", "toilet_paper", "butter", "bacon", "cheese"};
 int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
 
 typedef struct
@@ -157,7 +161,9 @@ void init_marginal_and_max()
     
   for (i = 0; i < NUM_PRODUCTS; ++i) {
     float rval = (float)rand()/RAND_MAX;
-    marginal_cost[i] = (int)(rval * MAX_MARGINAL);
+    //marginal_cost[i] = (int)(rval * MAX_MARGINAL);
+    marginal_cost[i] = 100+(i*10);
+    
     printf("Marginal cost for %s is %d.\n", products[i], marginal_cost[i]);
     max_cost[i] = MAX_PRICE_MULTIPLIER * marginal_cost[i];
   }
@@ -286,7 +292,12 @@ double gaussrand()
 
 // Get the manufacturer ID fom which the consumer chooses to 
 // purchase the given product
-int host_consumer_choice(int consumer_id, int product_id, int cheapest_man) {
+int host_consumer_choice(int consumer_id, int product_id, int cheapest_man, int loyalty_enabled) {
+  if (! loyalty_enabled) 
+  {
+    return cheapest_man;
+  }
+  
   // If cheapest manufacturer is already preferred, pick that
   if (loyalty[consumer_id] == cheapest_man) 
   {
@@ -379,9 +390,9 @@ void host_price_response(int manufacturer_id, int product_id) {
 void modify_price(int manufacturer_id, int product_id, int strategy)
 {
 
-  if (strategy == STRATEGY_UP && price[product_id][manufacturer_id] <= max_cost[product_id] + PRICE_INCREMENT)
+  if (strategy == STRATEGY_UP && price[product_id][manufacturer_id] <= max_cost[product_id] - PRICE_INCREMENT)
     price[product_id][manufacturer_id] += PRICE_INCREMENT;
-  else if (strategy == STRATEGY_DOWN && price[product_id][manufacturer_id] >= marginal_cost[product_id] - PRICE_INCREMENT)
+  else if (strategy == STRATEGY_DOWN && price[product_id][manufacturer_id] >= marginal_cost[product_id] + PRICE_INCREMENT)
     price[product_id][manufacturer_id] -= PRICE_INCREMENT;
   
 }
@@ -442,15 +453,17 @@ void update_loyalties(int** choices, int* loyalties, unsigned int num_consumers,
   }
 }
 
-void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit, int days, char* profitFilename, char* priceFilename)
+void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, 
+                       profits* profit, int days, int loyalty_enabled, 
+                       char* profitFilename, char* priceFilename,
+                       char* loyaltyFilename)
 {
   int day_num;
   int man_id, prod_id, cons_id;
   
-  char* ll = "loyalty.txt";
   FILE* profitFile = fopen(profitFilename, "w");
   FILE* priceFile = fopen(priceFilename, "w");
-  FILE* loyalFile = fopen(ll, "w");
+  FILE* loyalFile = fopen(loyaltyFilename, "w");
   
   for (day_num = 0; day_num < days; day_num++)
   {
@@ -479,17 +492,22 @@ void host_equilibriate(int** price, int** consumption, int* income, int* loyalty
       cons_choices[i] = (int*) calloc(sizeof(int), NUM_MANUFACTURERS);
     }
 
+    printf("Printing profits for man=0\n");
+    
     for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
       int cheapest = get_cheapest_man(prod_id);
       // TODO: Calculate the scores for this product here, rather than multiple times
       // in the consumer choice function.
       for (cons_id = 0; cons_id < NUM_CONSUMERS; cons_id++){
-        picks[cons_id] = host_consumer_choice(cons_id, prod_id, cheapest);
+        picks[cons_id] = host_consumer_choice(cons_id, prod_id, cheapest, loyalty_enabled);
         cons_choices[cons_id][picks[cons_id]]++;
       }
       int* counts = calculate_num_purchases(picks, NUM_CONSUMERS, NUM_MANUFACTURERS);
       printf("Number of purchases for each product:\n");
       print_int_array(counts, NUM_MANUFACTURERS);
+
+      printf("ProfitToday before prod %d: %d\n", prod_id, profit->today[0]);
+      
       profit_for_product(counts, profit->today, price[prod_id], marginal_cost[prod_id], NUM_MANUFACTURERS);
       print_profit_struct(profit, NUM_MANUFACTURERS);
     }
@@ -643,8 +661,8 @@ double sum_array(float* data_in, unsigned int length) {
    Second arg: blocks per grid */
 int main(int argc, char** argv)
 {
-  if (argc != 6) {
-    printf("Please input five arguments: threads, blocks, number of days and output filenames of profit and price files\n");
+  if (argc != 7) {
+    printf("Please input five arguments: threads, blocks, number of days and output filenames of profit, price and loyalty files\n");
     exit(1);
   }
   int threadsPerBlock = atoi(argv[1]);
@@ -652,7 +670,7 @@ int main(int argc, char** argv)
   int days = atoi(argv[3]);
   char* profitFilename = argv[4];
   char* priceFilename = argv[5];
-
+  char* loyaltyFilename = argv[6];
 
   int devID;
   cudaDeviceProp props;
@@ -699,7 +717,7 @@ int main(int argc, char** argv)
   print_2d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
   printf("Loyalties:\n");
   print_int_array(loyalty, NUM_CONSUMERS);
-  host_equilibriate(price, consumption, income, loyalty, profit_history, days, profitFilename, priceFilename);
+  host_equilibriate(price, consumption, income, loyalty, profit_history, days, LOYALTY_ENABLED, profitFilename, priceFilename, loyaltyFilename);
 
 
 
