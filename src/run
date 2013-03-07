@@ -25,7 +25,7 @@ if [ $? -eq 0 ]; then
 #        touch $LOYALTYFILE
     fi
 
-   ./bin/release/equilibria 16 16 $1 $PROFITFILE $PRICEFILE $LOYALTYFILE &
+   ./bin/release/equilibria 16 16 $1 $PROFITFILE $PRICEFILE $LOYALTYFILE $2 &
    sleep 1
    
    # Wait until all files for plotting exist

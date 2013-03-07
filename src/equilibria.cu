@@ -39,7 +39,7 @@
 
 // Whether the consumers choose which product to buy based on loyalty.
 // Otherwise, they just pick the cheapest
-#define LOYALTY_ENABLED 1
+#define LOYALTY_ENABLED 0
 
 const char* products[] = {"milk"};//, "bread", "toilet_paper", "butter", "bacon", "cheese"};
 int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
@@ -661,9 +661,10 @@ double sum_array(float* data_in, unsigned int length) {
    Second arg: blocks per grid */
 int main(int argc, char** argv)
 {
-  if (argc != 7) {
-    printf("Please input five arguments: threads, blocks, number of days and output filenames of profit, price and loyalty files\n");
-    exit(1);
+  if (argc < 7) {
+      printf("Too few arguments received.\n");
+      printf("Usage: %s nthreads nblocks ndays profit_outfile price_outfile loyalty_outfile [seed]\n", argv[0]);
+      exit(1);
   }
   int threadsPerBlock = atoi(argv[1]);
   int blocksPerGrid = atoi(argv[2]);
@@ -681,8 +682,13 @@ int main(int argc, char** argv)
 
   // ---------------------------------------------
 
-  srand(time(NULL));
-
+  // If more than 7 arguments received, there should be a seed present so use
+  // the seed to initialise the random number generator. Otherwise, just use
+  // the current time.
+  if (argc > 7)
+      srand(atoi(argv[7]));
+  else 
+      srand(time(NULL));
   /* int i; */
   /* for (i = 0; i < 100; ++i) { */
   /*   printf("%lf\n", positive_gaussrand() + 1); */
