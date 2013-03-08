@@ -89,7 +89,8 @@ int get_min_ind(int* array, unsigned int size);
 void put_plot_line(FILE* fp, int* arr, unsigned int size, int x);
 void modify_price(int manufacturer_id, int product_id, int strategy);
 int* manufacturer_loyalty_counts(int* loyal_arr, int num_manufacturers, int num_consumers);
-
+__device__ int d_get_max_ind(int* array, unsigned int size);
+__global__ void d_update_loyalties(int** choices, int* loyalties, unsigned int num_manufacturers);
 // First dimension is product ID
 // Second dimension is manufacturer ID
 // Price is in pence
@@ -451,6 +452,26 @@ void update_loyalties(int** choices, int* loyalties, unsigned int num_consumers,
       loyalties[cons_id] = chosen;
     }
   }
+}
+
+__global__ void d_update_loyalties(int** choices, int* loyalties, unsigned int num_manufacturers)
+{
+    int tid = threadIdx.x + blockDim.x*blockIdx.x;
+
+    loyalties[tid] = d_get_max_ind(choices[tid], num_manufacturers);
+}
+
+__device__ int d_get_max_ind(int* array, unsigned int size)
+{
+  int best = 0;
+  for (int i = 1; i < size; i++)
+  {
+    if (array[i] > array[best])
+    {
+      best = i;
+    }
+  }
+  return best;
 }
 
 void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, 
