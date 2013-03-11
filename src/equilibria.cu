@@ -90,7 +90,10 @@ void put_plot_line(FILE* fp, int* arr, unsigned int size, int x);
 void modify_price(int manufacturer_id, int product_id, int strategy, int** price_arr);
 int* manufacturer_loyalty_counts(int* loyal_arr, int num_manufacturers, int num_consumers);
 __device__ int d_get_max_ind(int* array, unsigned int size);
-__global__ void d_update_loyalties(int** choices, int* loyalties, unsigned int num_manufacturers);
+__global__ void d_update_loyalties(int* choices, int* loyalties, unsigned int num_manufacturers,
+                                   unsigned int num_customers);
+void launch_update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
+                             unsigned int num_manufacturers);
 // First dimension is product ID
 // Second dimension is manufacturer ID
 // Price is in pence
@@ -440,7 +443,8 @@ void swap_profit_pointers(profits* profit, unsigned int num_manufacturers)
 
 // Update the loyalties of customers based on the number of purchases
 // made from each manufacturer during the last day
-void update_loyalties(int** choices, int* loyalties, unsigned int num_consumers, unsigned int num_manufacturers)
+void update_loyalties(int** choices, int* loyalties, unsigned int num_consumers,
+                      unsigned int num_manufacturers)
 {
   for (int cons_id = 0; cons_id < num_consumers; cons_id++)
   {
@@ -454,13 +458,80 @@ void update_loyalties(int** choices, int* loyalties, unsigned int num_consumers,
   }
 }
 
-__global__ void d_update_loyalties(int** choices, int* loyalties, unsigned int num_manufacturers)
+  /* printf("Creating arrays and references.\n"); */
+  /* int host_cust[6] = {5,10,5,10,7,10}; */
+  /* int host_loyalty[] = {0,0,0}; */
+  /* int cust_memsize = sizeof(host_cust);//sizeof(int*) * 3 + sizeof(int) * 2 * 3; */
+  /* int loyalty_memsize = sizeof(host_loyalty);//3*sizeof(int); */
+  /* int* host_cust_res = (int*) malloc(cust_memsize); */
+  /* int* host_loyalty_res = (int*) malloc(loyalty_memsize); */
+  /* int* dev_cust; */
+  /* int* dev_loyalty; */
+  /* printf("Allocating device memory\n"); */
+  /* cutilSafeCall(cudaMalloc((void**) &dev_cust, cust_memsize)); */
+  /* cutilSafeCall(cudaMalloc((void**) &dev_loyalty, loyalty_memsize)); */
+  /* cutilSafeCall(cudaMemcpy(dev_cust, host_cust, cust_memsize, cudaMemcpyHostToDevice)); */
+  /* cutilSafeCall(cudaMemcpy(dev_loyalty, host_loyalty, loyalty_memsize, cudaMemcpyHostToDevice)); */
+  /* printf("Got to the kernel call\n"); */
+  /* print_int_array(host_loyalty, 3); */
+  /* d_update_loyalties<<<1, 3>>>(dev_cust, dev_loyalty, 2, 3); */
+
+  /* /\* int* dev_loyalty_res; *\/ */
+  /* /\* int** dev_cust_out; *\/ */
+  /* /\* cutilSafeCall(cudaMalloc((void***) &dev_cust_out, cust_memsize)); *\/ */
+  /* /\* cutilSafeCall(cudaMalloc((void**) &dev_loyalty_res, loyalty_memsize)); *\/ */
+
+  /* printf("Device call finished. Copying data from dev to host...\n"); */
+
+  /* cutilSafeCall(cudaMemcpy(host_loyalty_res, dev_loyalty, */
+  /*                          loyalty_memsize, cudaMemcpyDeviceToHost)); */
+  /* /\* cutilSafeCall(cudaMemcpy(host_cust_res, dev_cust,  *\/ */
+  /* /\*                          cust_memsize, cudaMemcpyDeviceToHost)); *\/ */
+
+
+  /* printf("\n\n"); */
+  /* print_int_array(host_loyalty_res, 3); */
+
+// Performs the necessary memory allocations and conversions and launches the
+// kernel function to compute the updated loyalties.
+void launch_update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
+                             unsigned int num_manufacturers)
+{
+    int nblocks = 1, nthreads = num_consumers;
+    int choice_memsize = num_consumers * num_manufacturers * sizeof(int);
+    int loyalty_memsize = num_consumers * sizeof(int);
+    int* dev_choices;
+    int* dev_loyalty;
+    
+    // Allocate device memory for both arrays
+    cutilSafeCall(cudaMalloc((void**) &dev_choices, choice_memsize));
+    cutilSafeCall(cudaMalloc((void**) &dev_loyalty, loyalty_memsize));
+
+    // Copy the data into the device arrays. Only need to do this for the choices, since that
+    // is the only data which is read - the device will overwrite values in the loyalties array.
+    cutilSafeCall(cudaMemcpy(dev_choices, choices, choice_memsize, cudaMemcpyHostToDevice));
+//    cutilSafeCall(cudaMemcpy(dev_loyalty, loyalties, loyalty_memsize, cudaMemcpyHostToDevice));
+
+//    print_int_array(host_loyalty, 3);
+    d_update_loyalties<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
+
+    cutilSafeCall(cudaMemcpy(loyalties, dev_loyalty,
+                             loyalty_memsize, cudaMemcpyDeviceToHost));
+
+//    print_int_array(host_loyalty_res, 3);
+}
+
+// Updates the loyalties of each customer after the purchases for the day have been made.
+// The number of threads should be the number of consumers.
+__global__ void d_update_loyalties(int* choices, int* loyalties, unsigned int num_manufacturers,
+                                   unsigned int num_customers)
 {
     int tid = threadIdx.x + blockDim.x*blockIdx.x;
 
-    loyalties[tid] = d_get_max_ind(choices[tid], num_manufacturers);
+    loyalties[tid] = d_get_max_ind(choices + tid * num_manufacturers, num_manufacturers);
 }
 
+// Get the index of the maximum value in the given array.
 __device__ int d_get_max_ind(int* array, unsigned int size)
 {
   int best = 0;
@@ -813,7 +884,6 @@ double sum_array(float* data_in, unsigned int length) {
   }  */
 
 
-
 /* First arg: threads per block,
    Second arg: blocks per grid */
 int main(int argc, char** argv)
@@ -823,6 +893,7 @@ int main(int argc, char** argv)
       printf("Usage: %s nthreads nblocks ndays profit_outfile price_outfile loyalty_outfile [seed]\n", argv[0]);
       exit(1);
   }
+
   int threadsPerBlock = atoi(argv[1]);
   int blocksPerGrid = atoi(argv[2]);
   int days = atoi(argv[3]);
@@ -875,18 +946,17 @@ int main(int argc, char** argv)
   /* int product_id = 0; */
   /* int cheapest_man = get_cheapest_man(product_id); */
   
-  /* // Cons, product_id, cheapest   */
+  /* // Cons, product_id, cheapest */
   /* for (int cons = 0; cons < NUM_CONSUMERS; cons++) { */
   /*   int bought_man = host_consumer_choice(cons, product_id, cheapest_man); */
   /*   printf("Cons=%d, Loyalty=%d, Bought_man=%d\n\n",cons, loyalty[cons], bought_man); */
   /* } */
 
-  print_2d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
-  printf("Loyalties:\n");
-  print_int_array(loyalty, NUM_CONSUMERS);
+  /* print_2d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS); */
+  /* printf("Loyalties:\n"); */
+  /* print_int_array(loyalty, NUM_CONSUMERS); */
+
   host_equilibriate(price, consumption, income, loyalty, profit_history, days, LOYALTY_ENABLED, profitFilename, priceFilename, loyaltyFilename);
-
-
 
   clock_t end_time = clock();
   time(&end);
