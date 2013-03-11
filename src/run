@@ -14,15 +14,12 @@ make
 if [ $? -eq 0 ]; then
     if [ -f $PROFITFILE ]; then
         rm $PROFITFILE
-#        touch $PROFITFILE
     fi
     if [ -f $PRICEFILE ]; then
         rm $PRICEFILE
-#        touch $PRICEFILE
     fi
     if [ -f $LOYALTYFILE ]; then
         rm $LOYALTYFILE
-#        touch $LOYALTYFILE
     fi
 
    ./bin/release/equilibria 16 16 $1 $PROFITFILE $PRICEFILE $LOYALTYFILE $2 &
@@ -34,5 +31,5 @@ if [ $? -eq 0 ]; then
        sleep 1
    done
    
-   plot
+   ./plot
 fi

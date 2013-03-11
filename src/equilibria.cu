@@ -87,7 +87,7 @@ void print_profit_struct(profits* profit, unsigned int num_manufacturers);
 int get_max_ind(int* array, unsigned int size);
 int get_min_ind(int* array, unsigned int size);
 void put_plot_line(FILE* fp, int* arr, unsigned int size, int x);
-void modify_price(int manufacturer_id, int product_id, int strategy);
+void modify_price(int manufacturer_id, int product_id, int strategy, int** price_arr);
 int* manufacturer_loyalty_counts(int* loyal_arr, int num_manufacturers, int num_consumers);
 __device__ int d_get_max_ind(int* array, unsigned int size);
 __global__ void d_update_loyalties(int** choices, int* loyalties, unsigned int num_manufacturers);
@@ -361,8 +361,8 @@ int host_consumer_choice(int consumer_id, int product_id, int cheapest_man, int 
 }
 
 // Get tomorrow's price for the given product ID
-void host_price_response(int manufacturer_id, int product_id) {
-  int current_strategy = price_strategy[manufacturer_id];
+void host_price_response(int manufacturer_id, int product_id, int* price_strategy_arr, int** price_arr) {
+  int current_strategy = price_strategy_arr[manufacturer_id];
   int profit1 = profit_history->two_days_ago[manufacturer_id];
   int profit2 = profit_history->yesterday[manufacturer_id];
 
@@ -371,30 +371,30 @@ void host_price_response(int manufacturer_id, int product_id) {
   {
     if (current_strategy == STRATEGY_UP) 
     {
-      price_strategy[manufacturer_id] = STRATEGY_DOWN;
+      price_strategy_arr[manufacturer_id] = STRATEGY_DOWN;
     }
     else
     {
-      price_strategy[manufacturer_id] = STRATEGY_UP;
+      price_strategy_arr[manufacturer_id] = STRATEGY_UP;
     }
   }
   else if (profit1 == profit2) {
-    price_strategy[manufacturer_id] = STRATEGY_DOWN;
+    price_strategy_arr[manufacturer_id] = STRATEGY_DOWN;
   }
 
-  modify_price(manufacturer_id, product_id, price_strategy[manufacturer_id]);
+  modify_price(manufacturer_id, product_id, price_strategy_arr[manufacturer_id], price_arr);
 }
 
 // Modifies the price the manufacturer charges for the given product based on
 // the current strategy. The price can never exceed some multiple of the marginal
 // cost, and can never fall below the marginal cost.
-void modify_price(int manufacturer_id, int product_id, int strategy)
+void modify_price(int manufacturer_id, int product_id, int strategy, int** price_arr)
 {
 
-  if (strategy == STRATEGY_UP && price[product_id][manufacturer_id] <= max_cost[product_id] - PRICE_INCREMENT)
-    price[product_id][manufacturer_id] += PRICE_INCREMENT;
-  else if (strategy == STRATEGY_DOWN && price[product_id][manufacturer_id] >= marginal_cost[product_id] + PRICE_INCREMENT)
-    price[product_id][manufacturer_id] -= PRICE_INCREMENT;
+  if (strategy == STRATEGY_UP && price_arr[product_id][manufacturer_id] <= max_cost[product_id] - PRICE_INCREMENT)
+    price_arr[product_id][manufacturer_id] += PRICE_INCREMENT;
+  else if (strategy == STRATEGY_DOWN && price_arr[product_id][manufacturer_id] >= marginal_cost[product_id] + PRICE_INCREMENT)
+    price_arr[product_id][manufacturer_id] -= PRICE_INCREMENT;
   
 }
 
@@ -474,6 +474,142 @@ __device__ int d_get_max_ind(int* array, unsigned int size)
   return best;
 }
 
+// Get tomorrow's strategy for each manufacturer
+// This sets strategy only. Price needs to be set separately.
+// Number of threads should be num of manufacturers
+__global__ void device_price_response(int* price_strategy,
+                                      int* profit_two_days_ago, 
+                                      int* profit_yesterday) {
+  const int tid = threadIdx.x + blockDim.x*blockIdx.x;
+  const int manufacturer_id = tid;
+
+  int current_strategy = price_strategy[manufacturer_id];
+  int profit1 = profit_two_days_ago[manufacturer_id];
+  int profit2 = profit_yesterday[manufacturer_id];
+
+  // If profit decreased, switch strategy
+  if (profit1 > profit2) 
+  {
+    if (current_strategy == STRATEGY_UP) 
+    {
+      price_strategy[manufacturer_id] = STRATEGY_DOWN;
+    }
+    else
+    {
+      price_strategy[manufacturer_id] = STRATEGY_UP;
+    }
+  }
+  else if (profit1 == profit2) {
+    price_strategy[manufacturer_id] = STRATEGY_DOWN;
+  }
+}
+
+void launch_device_price_response(int* price_strategy,
+                                  int* profit_two_days_ago, 
+                                  int* profit_yesterday,
+                                  int num_manufacturers)
+{
+  int blocks = 1;
+  int threadsPerBlock = num_manufacturers;
+  
+  int* dev_price_strategy;
+  int* dev_profit_two_days_ago;
+  int* dev_profit_yesterday;
+  int mem_size = num_manufacturers * sizeof(int);
+  
+  cutilSafeCall(cudaMalloc((void**) &dev_price_strategy, mem_size));
+  cutilSafeCall(cudaMalloc((void**) &dev_profit_two_days_ago, mem_size));
+  cutilSafeCall(cudaMalloc((void**) &dev_profit_yesterday, mem_size));
+
+  cutilSafeCall(cudaMemcpy(dev_price_strategy, price_strategy, mem_size, cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_profit_two_days_ago, profit_two_days_ago, mem_size, cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_profit_yesterday, profit_yesterday, mem_size, cudaMemcpyHostToDevice));
+
+  device_price_response<<<blocks, threadsPerBlock>>>(price_strategy,
+                                                     profit_two_days_ago,
+                                                     profit_yesterday);
+
+  cutilSafeCall(cudaMemcpy(price_strategy, dev_price_strategy, mem_size, cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(profit_two_days_ago, dev_profit_two_days_ago, mem_size, cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(profit_yesterday, dev_profit_yesterday, mem_size, cudaMemcpyDeviceToHost));
+}
+
+
+// Modifies the price the manufacturer charges for each product based on
+// the current strategy. The price can never exceed some multiple of the marginal
+// cost, and can never fall below the marginal cost.
+// Number of threads should be num_manufacturers*num_products
+__global__ void device_modify_price(int* strategy_arr, 
+                                    int** price_arr, 
+                                    int* max_cost_arr,
+                                    int* marginal_cost_arr,
+                                    int num_manufacturers,
+                                    int num_products)
+{
+  const int tid = threadIdx.x + blockDim.x*blockIdx.x;
+  const int manufacturer_id = tid / num_manufacturers;
+  const int product_id = tid % num_manufacturers;
+  
+  if (strategy_arr[manufacturer_id] == STRATEGY_UP 
+      && price_arr[product_id][manufacturer_id] <= max_cost_arr[product_id] - PRICE_INCREMENT) 
+  {
+    price_arr[product_id][manufacturer_id] += PRICE_INCREMENT;
+  }
+  else if (strategy_arr[manufacturer_id] == STRATEGY_DOWN 
+           && price_arr[product_id][manufacturer_id] >= marginal_cost_arr[product_id] + PRICE_INCREMENT)
+  {
+    price_arr[product_id][manufacturer_id] -= PRICE_INCREMENT;
+  }
+}
+
+void launch_device_modify_price(int* strategy_arr, 
+                                int** price_arr, 
+                                int* max_cost_arr,
+                                int* marginal_cost_arr,
+                                int num_manufacturers,
+                                int num_products)
+{
+  int blocks = 1;
+  int threadsPerBlock = num_manufacturers*num_products;
+  
+  // Mem size for arrays containing elements up to num_manufacturers 
+  int man_mem_size = num_manufacturers * sizeof(int);
+
+  // Mem size for arrays containing elements up to num_products
+  int prod_mem_size = num_products * sizeof(int);
+
+  // Mem size for arrays containing elements of num_products*num_manufacturers
+  int man_prod_mem_size = num_manufacturers * prod_mem_size;
+
+  int* dev_strategy_arr;
+  int** dev_price_arr; // 2D array needs conversion to 1D, as well as calls below
+  int* dev_max_cost_arr;
+  int* dev_marginal_cost_arr;
+  
+  cutilSafeCall(cudaMalloc((void**) &dev_strategy_arr, man_mem_size));
+  cutilSafeCall(cudaMalloc((void**) &dev_price_arr, man_prod_mem_size));
+  cutilSafeCall(cudaMalloc((void**) &dev_max_cost_arr, prod_mem_size));
+  cutilSafeCall(cudaMalloc((void**) &dev_marginal_cost_arr, prod_mem_size));
+
+  cutilSafeCall(cudaMemcpy(dev_strategy_arr, strategy_arr, man_mem_size, cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_price_arr, price_arr, man_prod_mem_size, cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_max_cost_arr, max_cost_arr, prod_mem_size, cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_marginal_cost_arr, marginal_cost_arr, prod_mem_size, cudaMemcpyHostToDevice));
+
+  device_modify_price<<<blocks, threadsPerBlock>>>(dev_strategy_arr,
+                                                   dev_price_arr, 
+                                                   dev_max_cost_arr,
+                                                   dev_marginal_cost_arr,
+                                                   num_manufacturers,
+                                                   num_products);
+
+  cutilSafeCall(cudaMemcpy(strategy_arr, dev_strategy_arr, man_mem_size, cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(price_arr, dev_price_arr, man_prod_mem_size, cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(max_cost_arr, dev_max_cost_arr, prod_mem_size, cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(marginal_cost_arr, dev_marginal_cost_arr, prod_mem_size, cudaMemcpyDeviceToHost));
+}
+
+
 void host_equilibriate(int** price, int** consumption, int* income, int* loyalty, 
                        profits* profit, int days, int loyalty_enabled, 
                        char* profitFilename, char* priceFilename,
@@ -496,7 +632,7 @@ void host_equilibriate(int** price, int** consumption, int* income, int* loyalty
     
     for (man_id = 0; man_id < NUM_MANUFACTURERS; man_id++){
       for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
-        host_price_response(man_id, prod_id);
+        host_price_response(man_id, prod_id, price_strategy, price);
       }
     }
 
@@ -715,6 +851,10 @@ int main(int argc, char** argv)
   /*   printf("%lf\n", positive_gaussrand() + 1); */
   /* } */
 
+  // Start of hard work...
+  clock_t start_time = clock();
+  time_t start, end;
+  time(&start);
 
   init_income();
   init_loyalty();
@@ -747,6 +887,14 @@ int main(int argc, char** argv)
   host_equilibriate(price, consumption, income, loyalty, profit_history, days, LOYALTY_ENABLED, profitFilename, priceFilename, loyaltyFilename);
 
 
+
+  clock_t end_time = clock();
+  time(&end);
+  
+  printf("CPU time taken: %fms\n", (double)(end_time-start_time)/CLOCKS_PER_SEC);
+  printf("Wall clock time taken: %d secs\n", (int)(end-start));
+  
+  
 
   // allocate host memory 
   /*  unsigned int mem_size = sizeof(float) * PADWIDTH*PADHEIGHT;
