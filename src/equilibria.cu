@@ -44,29 +44,6 @@
 const char* products[] = {"milk"};//, "bread", "toilet_paper", "butter", "bacon", "cheese"};
 int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
 
-typedef struct
-{
-  char* name;
-  int product_num;
-  float price;
-  float m_cost;
-} product;
-
-typedef struct
-{
-  int loyalty;
-  float income;
-  float bank_balance;
-  int* product_req;
-} consumer;
-
-typedef struct
-{
-  int num;
-  float bank_balance;
-  product** products;
-} manufacturer;
-
 // Arrays mapping manufacturer ID to profit on each day
 typedef struct
 {
@@ -81,61 +58,43 @@ double positive_gaussrand();
 void print_array(float*, unsigned int);
 void print_2d_array(float** data_in, unsigned int size1, unsigned int size2);
 void print_2d_int_array(int** data_in, unsigned int size1, unsigned int size2);
+void print_2d_1d_int_array(int* data_in, unsigned int size1, unsigned int size2);
 void print_int_array(int* data_in, unsigned int size);
 int* calculate_num_purchases(int* purchases, unsigned int num_consumers);
 void print_profit_struct(profits* profit, unsigned int num_manufacturers);
 int get_max_ind(int* array, unsigned int size);
 int get_min_ind(int* array, unsigned int size);
 void put_plot_line(FILE* fp, int* arr, unsigned int size, int x);
-void modify_price(int* marginal_cost, int* max_cost, int manufacturer_id, int product_id, int strategy, int** price_arr);
+void modify_price(int* marginal_cost, int* max_cost, int manufacturer_id, int product_id, int strategy, int* price_arr, int num_manufacturers);
 int* manufacturer_loyalty_counts(int* loyal_arr, int num_manufacturers, int num_consumers);
 __device__ int d_get_max_ind(int* array, unsigned int size);
 __global__ void d_update_loyalties(int* choices, int* loyalties, unsigned int num_manufacturers,
                                    unsigned int num_customers);
 void launch_update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
                              unsigned int num_manufacturers);
-// First dimension is product ID
-// Second dimension is manufacturer ID
-// Price is in pence
-//int** price; // 2D array
 
-//int* marginal_cost;
-
-//int* max_cost;
-
-// First dimension is product ID
-// Second dimension is consumer ID
-// Consumption is units of product consumed per day
-//int** consumption; // 2D array
-
-// Array mapping consumer ID to income in pence per day
-//int* income;
-
-// Array mapping consumer ID to manufacturer ID
-// Showing which manufacturer this consumer currently prefers
-//int* loyalty; 
-
-//profits* profit_history;
-
-// Array mapping manufacturer ID to price strategy 
-// (that is, one of the constants from STRATEGY_UP and _DOWN)
-//int* price_strategy;
-
-
-/*
-// Get the manufacturer ID fom which the consumer chooses to 
-// purchase the given product
-__device__ int consumer_choice(int consumer_id, int product_id) {
+// dim1 = first dimension, dim2 is second
+// So to do arr[1][5] -> idx(1, 5, width)
+int idx(unsigned int dim1, unsigned int dim2, unsigned int width)
+{
+  if (dim2 >= width) 
+  {
+    fprintf(stderr, "Error! IndexOutOfBounds. dim2=%d, width=%d. Exiting...\n", dim2, width);
+    exit(-1);
+  }
+  
+  return dim2 + dim1*width;
 }
 
-// Get tomorrow's price for the given product ID
-__device__ int price_response(int manufacturer_id, int product_id) {
+int val(int* array, unsigned int dim1, unsigned int dim2, unsigned int width) 
+{
+  return array[idx(dim1,dim2,width)];
 }
 
-__global__ void equilibriate(int** price, int** consumption, int* income, int* loyalty, profits* profit) {
+void set_val(int* array, unsigned int dim1, unsigned int dim2, unsigned int width, int val) 
+{
+  array[idx(dim1,dim2,width)] = val;
 }
-
-*/
 
 // Each manufacturer has a strategy at a given moment in time.
 // Either they are raising their profits or decreasing them. Here, we initialise
@@ -153,7 +112,6 @@ int* init_strategy()
   }
   return price_strategy;
 }
-
 
 // Initialises the marginal and maximum costs for each product. The maximum price is
 // some multiple of the marginal cost.
@@ -187,18 +145,19 @@ int* init_max_cost(int* marginal_cost){
 
 // Rand*MC*3 (roughly)
 // Initialises the prices for each product.
-int** init_prices(int* marginal_cost)
+int* init_prices(int* marginal_cost)
 {
   int i;
   int j;
 
-  int ** price = (int**) malloc(NUM_PRODUCTS * sizeof(int*));
+  int* price = (int*) malloc(NUM_PRODUCTS * NUM_MANUFACTURERS * sizeof(int));
+  const int width = NUM_MANUFACTURERS;
 
   for (i = 0; i < NUM_PRODUCTS; ++i) {
-    price[i] = (int*) malloc(NUM_MANUFACTURERS * sizeof(int));
     for (j = 0; j < NUM_MANUFACTURERS; ++j) {
       float rval = (float)rand()/RAND_MAX;
-      price[i][j] = marginal_cost[i] + (rval * marginal_cost[i]);
+      float val = marginal_cost[i] + (rval * marginal_cost[i]);
+      set_val(price, i, j, width, val);
 //      printf("Price for %s (%d) from manufacturer %d: %d\n", products[i], i, j, price[i][j]);
     }
   }
@@ -314,7 +273,7 @@ double gaussrand()
 
 // Get the manufacturer ID fom which the consumer chooses to 
 // purchase the given product
-int host_consumer_choice(int* loyalty, int** price, int consumer_id, int product_id, int cheapest_man, int loyalty_enabled) {
+int host_consumer_choice(int* loyalty, int* price, int consumer_id, int product_id, int cheapest_man, int loyalty_enabled, int num_manufacturers) {
   if (! loyalty_enabled) 
   {
     return cheapest_man;
@@ -328,15 +287,15 @@ int host_consumer_choice(int* loyalty, int** price, int consumer_id, int product
   }
   else
   {
-    float cheapest_price = (float) price[product_id][cheapest_man];
-    float* scores = (float*) malloc(sizeof(float)*NUM_MANUFACTURERS);
+    float cheapest_price = (float) val(price, product_id, cheapest_man, num_manufacturers);
+    float* scores = (float*) malloc(sizeof(float)*num_manufacturers);
 
     float total_score = 0.0f;
     
-    for (int man = 0; man < NUM_MANUFACTURERS; man++) 
+    for (int man = 0; man < num_manufacturers; man++) 
     {
       // equiv. of x in function
-      int price_diff = price[product_id][man] - cheapest_price;
+      int price_diff = val(price, product_id, man, num_manufacturers) - cheapest_price;
       float score;
       if (price_diff > RIPOFF_MULTIPLIER*cheapest_price) 
       {
@@ -361,10 +320,10 @@ int host_consumer_choice(int* loyalty, int** price, int consumer_id, int product
 
 
     printf("Scores array: ");
-    print_array(scores, NUM_MANUFACTURERS);
+    print_array(scores, num_manufacturers);
     printf("Rand is %.5f\n", ran);
 
-    for (int man = 0; man < NUM_MANUFACTURERS; man++) 
+    for (int man = 0; man < num_manufacturers; man++) 
     {
       score_so_far += scores[man];
       if (score_so_far >= ran)
@@ -382,7 +341,7 @@ int host_consumer_choice(int* loyalty, int** price, int consumer_id, int product
 }
 
 // Get tomorrow's price for the given product ID
-void host_price_response(int* marginal_cost, int* max_cost, profits* profit_history, int manufacturer_id, int product_id, int* price_strategy_arr, int** price_arr) {
+void host_price_response(int* marginal_cost, int* max_cost, profits* profit_history, int manufacturer_id, int product_id, int* price_strategy_arr, int* price_arr, int num_manufacturers) {
   int current_strategy = price_strategy_arr[manufacturer_id];
   int profit1 = profit_history->two_days_ago[manufacturer_id];
   int profit2 = profit_history->yesterday[manufacturer_id];
@@ -403,26 +362,33 @@ void host_price_response(int* marginal_cost, int* max_cost, profits* profit_hist
     price_strategy_arr[manufacturer_id] = STRATEGY_DOWN;
   }
 
-  modify_price(marginal_cost, max_cost, manufacturer_id, product_id, price_strategy_arr[manufacturer_id], price_arr);
+  modify_price(marginal_cost, max_cost, manufacturer_id, product_id, price_strategy_arr[manufacturer_id], price_arr, num_manufacturers);
 }
 
 // Modifies the price the manufacturer charges for the given product based on
 // the current strategy. The price can never exceed some multiple of the marginal
 // cost, and can never fall below the marginal cost.
-void modify_price(int* marginal_cost, int* max_cost, int manufacturer_id, int product_id, int strategy, int** price_arr)
+void modify_price(int* marginal_cost, int* max_cost, int manufacturer_id, int product_id, int strategy, int* price_arr, int num_manufacturers)
 {
-
-  if (strategy == STRATEGY_UP && price_arr[product_id][manufacturer_id] <= max_cost[product_id] - PRICE_INCREMENT)
-    price_arr[product_id][manufacturer_id] += PRICE_INCREMENT;
-  else if (strategy == STRATEGY_DOWN && price_arr[product_id][manufacturer_id] >= marginal_cost[product_id] + PRICE_INCREMENT)
-    price_arr[product_id][manufacturer_id] -= PRICE_INCREMENT;
+  int price_of_prod = val(price_arr, product_id, manufacturer_id, num_manufacturers);
   
+  if (strategy == STRATEGY_UP && price_of_prod <= max_cost[product_id] - PRICE_INCREMENT) 
+  {
+    int new_price = price_of_prod + PRICE_INCREMENT;
+    set_val(price_arr, product_id, manufacturer_id, num_manufacturers, new_price);
+  }
+  else if (strategy == STRATEGY_DOWN && price_of_prod >= marginal_cost[product_id] + PRICE_INCREMENT) 
+  {
+    int new_price = price_of_prod - PRICE_INCREMENT;
+    set_val(price_arr, product_id, manufacturer_id, num_manufacturers, new_price);
+  }
 }
 
 // Gets the ID of the manufacturer which has the cheapest product for the given ID.
-int get_cheapest_man(int** price, int product_id)
+int get_cheapest_man(int* price, int product_id)
 {
-  return get_min_ind(price[product_id], NUM_MANUFACTURERS);
+  int* price_arr_point = &price[product_id*NUM_MANUFACTURERS];
+  return get_min_ind(price_arr_point, NUM_MANUFACTURERS);
 }
 
 // We pass in the array of integers containing which manufacturer each
@@ -698,7 +664,7 @@ void launch_device_modify_price(int* strategy_arr,
 }
 
 
-void host_equilibriate(int** price, int* loyalty,
+void host_equilibriate(int* price, int* loyalty,
                        profits* profit, int* price_strategy,
                        int* marginal_cost, int* max_cost, int days, int loyalty_enabled, 
                        char* profitFilename, char* priceFilename,
@@ -714,19 +680,19 @@ void host_equilibriate(int** price, int* loyalty,
   for (day_num = 0; day_num < days; day_num++)
   {
     printf("Old prices (line = product):\n");
-    print_2d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
+    print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
 
     printf("Strategies (0 is up, 1 is down): \n");
     print_int_array(price_strategy, NUM_MANUFACTURERS);
     
     for (man_id = 0; man_id < NUM_MANUFACTURERS; man_id++){
       for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
-          host_price_response(marginal_cost, max_cost, profit, man_id, prod_id, price_strategy, price);
+        host_price_response(marginal_cost, max_cost, profit, man_id, prod_id, price_strategy, price, NUM_MANUFACTURERS);
       }
     }
 
     printf("New prices (line = product):\n");
-    print_2d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
+    print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
 
 
     int* picks = (int*)malloc(sizeof(int) * NUM_CONSUMERS);
@@ -745,7 +711,7 @@ void host_equilibriate(int** price, int* loyalty,
       // TODO: Calculate the scores for this product here, rather than multiple times
       // in the consumer choice function.
       for (cons_id = 0; cons_id < NUM_CONSUMERS; cons_id++){
-          picks[cons_id] = host_consumer_choice(loyalty, price, cons_id, prod_id, cheapest, loyalty_enabled);
+        picks[cons_id] = host_consumer_choice(loyalty, price, cons_id, prod_id, cheapest, loyalty_enabled, NUM_MANUFACTURERS);
         cons_choices[cons_id][picks[cons_id]]++;
       }
       int* counts = calculate_num_purchases(picks, NUM_CONSUMERS, NUM_MANUFACTURERS);
@@ -754,7 +720,9 @@ void host_equilibriate(int** price, int* loyalty,
 
       printf("ProfitToday before prod %d: %d\n", prod_id, profit->today[0]);
       
-      profit_for_product(counts, profit->today, price[prod_id], marginal_cost[prod_id], NUM_MANUFACTURERS);
+      int* price_arr_point = &price[prod_id*NUM_MANUFACTURERS];
+      
+      profit_for_product(counts, profit->today, price_arr_point, marginal_cost[prod_id], NUM_MANUFACTURERS);
       print_profit_struct(profit, NUM_MANUFACTURERS);
     }
 
@@ -766,7 +734,8 @@ void host_equilibriate(int** price, int* loyalty,
 
     put_plot_line(profitFile, profit->today, NUM_MANUFACTURERS, day_num);
     int prod_to_print = 0;
-    put_plot_line(priceFile, price[prod_to_print], NUM_MANUFACTURERS, day_num);
+    int* price_arr_point = &price[prod_to_print*NUM_MANUFACTURERS];
+    put_plot_line(priceFile, price_arr_point, NUM_MANUFACTURERS, day_num);
     int* ct = manufacturer_loyalty_counts(loyalty, NUM_MANUFACTURERS, NUM_CONSUMERS);
     put_plot_line(loyalFile, ct, NUM_MANUFACTURERS, day_num);
     // swap the pointers inside the profit struct so that we can overwrite without needing to free
@@ -866,6 +835,19 @@ void print_2d_int_array(int** data_in, unsigned int size1, unsigned int size2){
   }
 }
 
+// Print a 2d array represented as a 1d array in 2d format
+void print_2d_1d_int_array(int* data_in, unsigned int size1, unsigned int size2){
+  for (int i = 0; i < size1; i++)
+  {
+    printf("[");
+    for (int j = 0; j < size2 - 1; j++) 
+    {
+      printf("%d,", val(data_in, i, j, size2));
+    }
+    printf("%d]\n", val(data_in, i, size2-1, size2));
+  }
+}
+
 void print_int_array(int* data_in, unsigned int size) {
   for (int i=0; i < size-1; i++) {
     printf("%d,", data_in[i]);
@@ -945,34 +927,12 @@ int main(int argc, char** argv)
   time_t start, end;
   time(&start);
 
-  int* income = init_income();
   int* loyalty = init_loyalty();
   int* marginal_cost = init_marginal_cost();
   int* max_cost = init_max_cost(marginal_cost);
-  int** price = init_prices(marginal_cost);
+  int* price = init_prices(marginal_cost);
   int* price_strategy = init_strategy();
   profits* profit_history = init_profits();
-
-  /* printf("Printing two days ago\n"); */
-  /* print_int_array(profit_history->two_days_ago, NUM_MANUFACTURERS); */
-
-  /* printf("Printing yesterday\n"); */
-  /* print_int_array(profit_history->yesterday, NUM_MANUFACTURERS); */
-
-  /* host_price_response(0,0); */
-  
-  /* int product_id = 0; */
-  /* int cheapest_man = get_cheapest_man(product_id); */
-  
-  /* // Cons, product_id, cheapest */
-  /* for (int cons = 0; cons < NUM_CONSUMERS; cons++) { */
-  /*   int bought_man = host_consumer_choice(cons, product_id, cheapest_man); */
-  /*   printf("Cons=%d, Loyalty=%d, Bought_man=%d\n\n",cons, loyalty[cons], bought_man); */
-  /* } */
-
-  /* print_2d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS); */
-  /* printf("Loyalties:\n"); */
-  /* print_int_array(loyalty, NUM_CONSUMERS); */
 
   host_equilibriate(price, loyalty, profit_history, price_strategy, marginal_cost, max_cost, days, LOYALTY_ENABLED, profitFilename, priceFilename, loyaltyFilename);
 
