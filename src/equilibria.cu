@@ -39,9 +39,9 @@
 
 // Whether the consumers choose which product to buy based on loyalty.
 // Otherwise, they just pick the cheapest
-#define LOYALTY_ENABLED 0
+#define LOYALTY_ENABLED 1
 
-const char* products[] = {"milk"};//, "bread", "toilet_paper", "butter", "bacon", "cheese"};
+const char* products[] = {"milk", "bread", "toilet_paper", "butter", "bacon", "cheese"};
 int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
 
 // Arrays mapping manufacturer ID to profit on each day
@@ -79,7 +79,8 @@ int idx(unsigned int dim1, unsigned int dim2, unsigned int width)
 {
   if (dim2 >= width) 
   {
-    fprintf(stderr, "Error! IndexOutOfBounds. dim2=%d, width=%d. Exiting...\n", dim2, width);
+    fprintf(stderr, "Error! IndexOutOfBounds. dim2=%d, width=%d. Exiting...\n", 
+            dim2, width);
     exit(-1);
   }
   
@@ -95,6 +96,40 @@ void set_val(int* array, unsigned int dim1, unsigned int dim2, unsigned int widt
 {
   array[idx(dim1,dim2,width)] = val;
 }
+
+// Please forgive me.
+// No way to throw exceptions, and setting error codes is too complex.
+// This crashes the kernel.
+__device__ void die() 
+{
+  int* balls = (int*)0xffffffff;
+  *balls = 5;
+}
+
+// dim1 = first dimension, dim2 is second
+// So to do arr[1][5] -> idx(1, 5, width)
+__device__ int d_idx(unsigned int dim1, unsigned int dim2, unsigned int width)
+{
+  if (dim2 >= width) 
+  {
+    //fprintf(stderr, "Error! IndexOutOfBounds. dim2=%d, width=%d. Exiting...\n", 
+    //        dim2, width);
+    die(); // Equivalent of throwing an exception since we can't
+  }
+  
+  return dim2 + dim1*width;
+}
+
+__device__ int d_val(int* array, unsigned int dim1, unsigned int dim2, unsigned int width) 
+{
+  return array[d_idx(dim1,dim2,width)];
+}
+
+__device__ void d_set_val(int* array, unsigned int dim1, unsigned int dim2, unsigned int width, int val) 
+{
+  array[d_idx(dim1,dim2,width)] = val;
+}
+
 
 // Each manufacturer has a strategy at a given moment in time.
 // Either they are raising their profits or decreasing them. Here, we initialise
@@ -514,7 +549,6 @@ __global__ void d_update_loyalties(int* choices, int* loyalties, unsigned int nu
                                    unsigned int num_customers)
 {
     int tid = threadIdx.x + blockDim.x*blockIdx.x;
-
     loyalties[tid] = d_get_max_ind(choices + tid * num_manufacturers, num_manufacturers);
 }
 
@@ -598,7 +632,7 @@ void launch_device_price_response(int* price_strategy,
 // cost, and can never fall below the marginal cost.
 // Number of threads should be num_manufacturers*num_products
 __global__ void device_modify_price(int* strategy_arr, 
-                                    int** price_arr, 
+                                    int* price_arr, 
                                     int* max_cost_arr,
                                     int* marginal_cost_arr,
                                     int num_manufacturers,
@@ -608,20 +642,22 @@ __global__ void device_modify_price(int* strategy_arr,
   const int manufacturer_id = tid / num_manufacturers;
   const int product_id = tid % num_manufacturers;
   
-  if (strategy_arr[manufacturer_id] == STRATEGY_UP 
-      && price_arr[product_id][manufacturer_id] <= max_cost_arr[product_id] - PRICE_INCREMENT) 
+  int price_of_prod = d_val(price_arr, product_id, manufacturer_id, num_manufacturers);
+  
+  if (strategy_arr[manufacturer_id] == STRATEGY_UP && price_of_prod <= max_cost_arr[product_id] - PRICE_INCREMENT) 
   {
-    price_arr[product_id][manufacturer_id] += PRICE_INCREMENT;
+    int new_price = price_of_prod + PRICE_INCREMENT;
+    d_set_val(price_arr, product_id, manufacturer_id, num_manufacturers, new_price);
   }
-  else if (strategy_arr[manufacturer_id] == STRATEGY_DOWN 
-           && price_arr[product_id][manufacturer_id] >= marginal_cost_arr[product_id] + PRICE_INCREMENT)
+  else if (strategy_arr[manufacturer_id] == STRATEGY_DOWN && price_of_prod >= marginal_cost_arr[product_id] + PRICE_INCREMENT) 
   {
-    price_arr[product_id][manufacturer_id] -= PRICE_INCREMENT;
+    int new_price = price_of_prod - PRICE_INCREMENT;
+    d_set_val(price_arr, product_id, manufacturer_id, num_manufacturers, new_price);
   }
 }
 
 void launch_device_modify_price(int* strategy_arr, 
-                                int** price_arr, 
+                                int* price_arr, 
                                 int* max_cost_arr,
                                 int* marginal_cost_arr,
                                 int num_manufacturers,
@@ -640,7 +676,7 @@ void launch_device_modify_price(int* strategy_arr,
   int man_prod_mem_size = num_manufacturers * prod_mem_size;
 
   int* dev_strategy_arr;
-  int** dev_price_arr; // 2D array needs conversion to 1D, as well as calls below
+  int* dev_price_arr;
   int* dev_max_cost_arr;
   int* dev_marginal_cost_arr;
   
