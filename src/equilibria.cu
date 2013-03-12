@@ -427,19 +427,23 @@ void swap_profit_pointers(profits* profit, unsigned int num_manufacturers)
 
 // Update the loyalties of customers based on the number of purchases
 // made from each manufacturer during the last day
-void update_loyalties(int** choices, int* loyalties, unsigned int num_consumers,
+void update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
                       unsigned int num_manufacturers)
 {
-  for (int cons_id = 0; cons_id < num_consumers; cons_id++)
-  {
-    // Most purchased-from manufacturer
-    int chosen = get_max_ind(choices[cons_id], num_manufacturers);
+    for (int cons_id = 0; cons_id < num_consumers; cons_id++)
+    {
+        // Most purchased-from manufacturer
+        int* choices_subarr = &choices[cons_id*num_manufacturers];
+        int most_purchased = get_max_ind(choices_subarr, num_manufacturers);
 
-    // If we have purchased equally, we do not switch allegiance
-    if (choices[chosen] != choices[loyalties[cons_id]]) {
-      loyalties[cons_id] = chosen;
+        // If we purchase more products from a manufacturer to whom we are
+        // not currently loyal to, we switch to the one that we purchased
+        // most from.
+        if (val(choices, cons_id, most_purchased, num_manufacturers) !=
+            val(choices, cons_id, loyalties[cons_id], num_manufacturers)) {
+            loyalties[cons_id] = most_purchased;
+        }
     }
-  }
 }
 
   /* printf("Creating arrays and references.\n"); */
@@ -699,10 +703,10 @@ void host_equilibriate(int* price, int* loyalty,
     // This array contains the number of picks that a consumer has made from
     // each manufacturer. The first dimension is the consumer id, and the second
     // is the manufacturer.
-    int** cons_choices = (int**) malloc(NUM_CONSUMERS * sizeof(int*));
-    for (int i = 0; i < NUM_CONSUMERS; i++){
-      cons_choices[i] = (int*) calloc(sizeof(int), NUM_MANUFACTURERS);
-    }
+    int* cons_choices = (int*) calloc(NUM_CONSUMERS * NUM_MANUFACTURERS, sizeof(int));
+    /* for (int i = 0; i < NUM_CONSUMERS; i++){ */
+    /*   cons_choices[i] = (int*) calloc(sizeof(int), NUM_MANUFACTURERS); */
+    /* } */
 
     printf("Printing profits for man=0\n");
     
@@ -712,7 +716,11 @@ void host_equilibriate(int* price, int* loyalty,
       // in the consumer choice function.
       for (cons_id = 0; cons_id < NUM_CONSUMERS; cons_id++){
         picks[cons_id] = host_consumer_choice(loyalty, price, cons_id, prod_id, cheapest, loyalty_enabled, NUM_MANUFACTURERS);
-        cons_choices[cons_id][picks[cons_id]]++;
+        // Increment the number of times the consumer picked the manufacturer returned from
+        // the host_consumer_choice function
+        int new_val = val(cons_choices, cons_id, picks[cons_id], NUM_MANUFACTURERS) + 1;
+        set_val(cons_choices, cons_id, picks[cons_id], NUM_MANUFACTURERS, new_val);
+        //cons_choices[cons_id][picks[cons_id]]++;
       }
       int* counts = calculate_num_purchases(picks, NUM_CONSUMERS, NUM_MANUFACTURERS);
       printf("Number of purchases for each product:\n");
@@ -730,7 +738,7 @@ void host_equilibriate(int* price, int* loyalty,
     printf("Loyalties:\n");
     print_int_array(loyalty, NUM_CONSUMERS);
     printf("Printing cons choices.\n");
-    print_2d_int_array(cons_choices, NUM_CONSUMERS, NUM_MANUFACTURERS);
+    print_2d_1d_int_array(cons_choices, NUM_CONSUMERS, NUM_MANUFACTURERS);
 
     put_plot_line(profitFile, profit->today, NUM_MANUFACTURERS, day_num);
     int prod_to_print = 0;
