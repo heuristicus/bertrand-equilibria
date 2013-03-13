@@ -8,14 +8,22 @@
 
 #define ITERS 10
 
+//#define BLOCK_SIZE 32
+//#define GRID_SIZE 32
+
+#define COMPUTE_ON_DEVICE 50
+#define COMPUTE_ON_HOST 51
+#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_HOST
+#define MODIFY_PRICE_COMPUTE COMPUTE_ON_HOST
+#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_HOST
+
+
 // Direction of price for the given manufacturer.
 // Up means prices are increasing, down is decreasing
 #define NUM_STRATEGIES 2
 #define STRATEGY_UP 0
 #define STRATEGY_DOWN 1
 
-//#define BLOCK_SIZE 32
-//#define GRID_SIZE 32
 #define NUM_MANUFACTURERS 2
 #define NUM_CONSUMERS 100
 #define MAX_MARGINAL 250
@@ -517,7 +525,8 @@ void update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
 
 // Performs the necessary memory allocations and conversions and launches the
 // kernel function to compute the updated loyalties.
-void launch_update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
+void launch_update_loyalties(int* choices, int* loyalties, 
+                             unsigned int num_consumers,
                              unsigned int num_manufacturers)
 {
     int nblocks = 1, nthreads = num_consumers;
@@ -545,7 +554,8 @@ void launch_update_loyalties(int* choices, int* loyalties, unsigned int num_cons
 
 // Updates the loyalties of each customer after the purchases for the day have been made.
 // The number of threads should be the number of consumers.
-__global__ void d_update_loyalties(int* choices, int* loyalties, unsigned int num_manufacturers,
+__global__ void d_update_loyalties(int* choices, int* loyalties, 
+                                   unsigned int num_manufacturers,
                                    unsigned int num_customers)
 {
     int tid = threadIdx.x + blockDim.x*blockIdx.x;
@@ -706,7 +716,8 @@ void launch_device_modify_price(int* strategy_arr,
 
 void host_equilibriate(int* price, int* loyalty,
                        profits* profit, int* price_strategy,
-                       int* marginal_cost, int* max_cost, int days, int loyalty_enabled, 
+                       int* marginal_cost, int* max_cost, 
+                       int days, int loyalty_enabled, 
                        char* profitFilename, char* priceFilename,
                        char* loyaltyFilename)
 {
@@ -724,16 +735,33 @@ void host_equilibriate(int* price, int* loyalty,
 
     printf("Strategies (0 is up, 1 is down): \n");
     print_int_array(price_strategy, NUM_MANUFACTURERS);
-    
-    for (man_id = 0; man_id < NUM_MANUFACTURERS; man_id++){
-      for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
-        host_price_response(marginal_cost, max_cost, profit, man_id, prod_id, price_strategy, price, NUM_MANUFACTURERS);
+ 
+    if (PRICE_RESPONSE_COMPUTE == COMPUTE_ON_DEVICE) 
+    {
+      launch_device_price_response(price_strategy,
+                                   profit->two_days_ago, 
+                                   profit->yesterday,
+                                   NUM_MANUFACTURERS);
+      launch_device_modify_price(price_strategy, 
+                                 price,
+                                 max_cost,
+                                 marginal_cost,
+                                 NUM_MANUFACTURERS,
+                                 NUM_PRODUCTS);
+    }
+    else 
+    {
+      for (man_id = 0; man_id < NUM_MANUFACTURERS; man_id++){
+        for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
+          host_price_response(marginal_cost, max_cost, profit, 
+                              man_id, prod_id, price_strategy, 
+                              price, NUM_MANUFACTURERS);
+        }
       }
     }
 
     printf("New prices (line = product):\n");
     print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
-
 
     int* picks = (int*)malloc(sizeof(int) * NUM_CONSUMERS);
     // This array contains the number of picks that a consumer has made from
@@ -747,13 +775,15 @@ void host_equilibriate(int* price, int* loyalty,
     printf("Printing profits for man=0\n");
     
     for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
-        int cheapest = get_cheapest_man(price, prod_id);
+      int cheapest = get_cheapest_man(price, prod_id);
       // TODO: Calculate the scores for this product here, rather than multiple times
       // in the consumer choice function.
       for (cons_id = 0; cons_id < NUM_CONSUMERS; cons_id++){
-        picks[cons_id] = host_consumer_choice(loyalty, price, cons_id, prod_id, cheapest, loyalty_enabled, NUM_MANUFACTURERS);
-        // Increment the number of times the consumer picked the manufacturer returned from
-        // the host_consumer_choice function
+        picks[cons_id] = host_consumer_choice(loyalty, price, cons_id, 
+                                              prod_id, cheapest, loyalty_enabled,
+                                              NUM_MANUFACTURERS);
+        // Increment the number of times the consumer picked the manufacturer
+        // returned from the host_consumer_choice function
         int new_val = val(cons_choices, cons_id, picks[cons_id], NUM_MANUFACTURERS) + 1;
         set_val(cons_choices, cons_id, picks[cons_id], NUM_MANUFACTURERS, new_val);
         //cons_choices[cons_id][picks[cons_id]]++;
@@ -770,7 +800,18 @@ void host_equilibriate(int* price, int* loyalty,
       print_profit_struct(profit, NUM_MANUFACTURERS);
     }
 
-    update_loyalties(cons_choices, loyalty, NUM_CONSUMERS, NUM_MANUFACTURERS);
+    if (UPDATE_LOYALTIES_COMPUTE == COMPUTE_ON_HOST) 
+    {
+      update_loyalties(cons_choices, loyalty, NUM_CONSUMERS, NUM_MANUFACTURERS);
+    }
+    else
+    {
+      launch_update_loyalties(cons_choices, 
+                              loyalty,
+                              NUM_CONSUMERS,
+                              NUM_MANUFACTURERS);
+    }
+    
     printf("Loyalties:\n");
     print_int_array(loyalty, NUM_CONSUMERS);
     printf("Printing cons choices.\n");
