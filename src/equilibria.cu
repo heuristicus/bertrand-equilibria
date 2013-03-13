@@ -337,7 +337,7 @@ double gaussrand()
 
 // Computes the choice made for each product by each consumer. Puts the values for each consumer into the chosen_manufacturers array,
 // which is assumed to be initialised with a size of num_consumers*num_products.
-__global__ void device_consumer_choice(int* chosen_manufacturers, int* scores, int* loyalty, int* price, unsigned int num_manufacturers, unsigned int num_consumers, unsigned int num_products, curandState* states){
+__global__ void device_consumer_choice(int* chosen_manufacturers, int* loyalty, int* price, unsigned int num_manufacturers, unsigned int num_consumers, unsigned int num_products, curandState* states){
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     
     int cons_id = tid; // Each thread deals with a single consumer
@@ -389,6 +389,36 @@ __global__ void device_consumer_choice(int* chosen_manufacturers, int* scores, i
         }
     }
 }
+
+void launch_consumer_choice(int* chosen_manufacturers, int* loyalty, int* price, unsigned int num_manufacturers, unsigned int num_consumers, unsigned int num_products){
+    int blocks = 1;
+    int threadsPerBlock = num_consumers;
+  
+    int* dev_loyalty;
+    int* dev_chosen_manufacturers;
+    int* dev_price;
+    int loyalty_memsize = num_consumers * sizeof(int);
+    int choose_memsize = num_consumers * sizeof(int); 
+    int price_memsize = num_products * num_manufacturers * sizeof(int);
+
+    curandState* dev_states;
+    
+    cutilSafeCall(cudaMalloc((void**) &dev_states, threadsPerBlock*blocks*sizeof(curandState)));
+    cutilSafeCall(cudaMalloc((void**) &dev_loyalty, loyalty_memsize));
+    cutilSafeCall(cudaMalloc((void**) &dev_chosen_manufacturers, choose_memsize));
+    cutilSafeCall(cudaMalloc((void**) &dev_price, price_memsize));
+
+    cutilSafeCall(cudaMemcpy(dev_loyalty, loyalty, loyalty_memsize, cudaMemcpyHostToDevice));
+    cutilSafeCall(cudaMemcpy(dev_chosen_manufacturers, chosen_manufacturers, choose_memsize, cudaMemcpyHostToDevice));
+    cutilSafeCall(cudaMemcpy(dev_price, price, price_memsize, cudaMemcpyHostToDevice));
+
+    device_consumer_choice<<<blocks, threadsPerBlock>>>(dev_chosen_manufacturers, dev_price, dev_loyalty, num_manufacturers, num_consumers, num_products, dev_states);
+
+    cutilSafeCall(cudaMemcpy(dev_loyalty, loyalty, loyalty_memsize, cudaMemcpyDeviceToHost));
+    cutilSafeCall(cudaMemcpy(dev_chosen_manufacturers, chosen_manufacturers, choose_memsize, cudaMemcpyDeviceToHost));
+    cutilSafeCall(cudaMemcpy(dev_price, price, price_memsize, cudaMemcpyDeviceToHost));
+}
+
 
 // Get the manufacturer ID fom which the consumer chooses to 
 // purchase the given product
