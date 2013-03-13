@@ -1,5 +1,6 @@
 #include "cutil_inline.h"
-
+#include "curand.h"
+#include "curand_kernel.h"
 #include "math.h"
 #include "time.h"
 #include "stdlib.h"
@@ -50,7 +51,8 @@
 #define LOYALTY_ENABLED 1
 
 const char* products[] = {"milk", "bread", "toilet_paper", "butter", "bacon", "cheese"};
-int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
+#define NUM_PRODUCTS 6 // DON'T FORGET TO CHANGE THIS!!!
+//int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
 
 // Arrays mapping manufacturer ID to profit on each day
 typedef struct
@@ -136,6 +138,25 @@ __device__ int d_val(int* array, unsigned int dim1, unsigned int dim2, unsigned 
 __device__ void d_set_val(int* array, unsigned int dim1, unsigned int dim2, unsigned int width, int val) 
 {
   array[d_idx(dim1,dim2,width)] = val;
+}
+
+__device__ int d_get_min_ind(int* array, unsigned int size)
+{
+    int best = 0;
+    for (int i = 1; i < size; i++)
+    {
+        if (array[i] < array[best])
+        {
+            best = i;
+        }
+    }
+    return best;
+}
+
+__device__ int d_get_cheapest_man(int* price, int product_id)
+{
+    int* price_arr_point = &price[product_id*NUM_MANUFACTURERS];
+    return d_get_min_ind(price_arr_point, NUM_MANUFACTURERS);
 }
 
 
@@ -314,6 +335,61 @@ double gaussrand()
   return X;
 }
 
+// Computes the choice made for each product by each consumer. Puts the values for each consumer into the chosen_manufacturers array,
+// which is assumed to be initialised with a size of num_consumers*num_products.
+__global__ void device_consumer_choice(int* chosen_manufacturers, int* scores, int* loyalty, int* price, unsigned int num_manufacturers, unsigned int num_consumers, unsigned int num_products, curandState* states){
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    
+    int cons_id = tid; // Each thread deals with a single consumer
+    curand_init(1234, tid, 0, &states[tid]);
+    for (int product_id = 0; product_id < num_products; product_id++){
+        int cheapest_man = d_get_cheapest_man(price, product_id);
+        if (cheapest_man == loyalty[cons_id]){
+            chosen_manufacturers[cons_id * product_id] = cheapest_man;
+        } else {
+            float cheapest_price = (float) d_val(price, product_id, cheapest_man, num_manufacturers);
+            float scores[NUM_PRODUCTS];
+
+            float total_score = 0.0f;
+    
+            for (int man = 0; man < num_manufacturers; man++) 
+            {
+                // equiv. of x in function
+                int price_diff = d_val(price, product_id, man, num_manufacturers) - cheapest_price;
+                float score;
+                if (price_diff > RIPOFF_MULTIPLIER*cheapest_price) 
+                {
+                    score = 0;
+                }
+                else
+                {
+                    score = cheapest_price/(LOYALTY_ALPHA*price_diff + cheapest_price);
+                    total_score += score;
+                }
+
+                if (man == loyalty[cons_id])
+                {
+                    score *= LOYALTY_MULTIPLIER;
+                }
+
+                scores[man] = score;
+            }
+
+            float ran = curand_uniform(&states[tid]);
+            float score_so_far = 0.0f;
+
+            for (int man = 0; man < num_manufacturers; man++) 
+            {
+                score_so_far += scores[man];
+                if (score_so_far >= ran)
+                {
+                    chosen_manufacturers[cons_id * product_id] = man;
+                }
+            }
+        }
+    }
+}
+
 // Get the manufacturer ID fom which the consumer chooses to 
 // purchase the given product
 int host_consumer_choice(int* loyalty, int* price, int consumer_id, int product_id, int cheapest_man, int loyalty_enabled, int num_manufacturers) {
@@ -434,6 +510,8 @@ int get_cheapest_man(int* price, int product_id)
   return get_min_ind(price_arr_point, NUM_MANUFACTURERS);
 }
 
+
+
 // We pass in the array of integers containing which manufacturer each
 // consumer chooses based on the host_consumer_choice function. The return
 // is an array containing the number of purchases made for each manufacturer
@@ -447,6 +525,13 @@ int* calculate_num_purchases(int* purchases, unsigned int num_consumers,
   return counts;
 }
 
+/* // The counts array will be modified to contain the total purchases for each manufacturer. It is */
+/* // assumed to be initialised with the correct size. */
+/* __global__ void calculate_num_purchases(int* counts, int* purchases, unsigned int num_consumers, */
+/*                              unsigned int num_manufacturers){ */
+    
+/* } */
+
 // Adds the profit for the given product into the profit_today array. The array
 // should be initialised with zeroes on the first call
 void profit_for_product(int* purchases, int* profit_today, int* price,
@@ -455,6 +540,10 @@ void profit_for_product(int* purchases, int* profit_today, int* price,
     profit_today[man_id] += purchases[man_id] * (price[man_id] - marginal_cost);
   }
 }
+
+/* __global__ void profit_for_product(int* purchases, int* profit_today, int* price, int marginal_cost, unsigned int num_manufacturers){ */
+    
+/* } */
 
 // Shifts pointers around in the given profit struct so that today's profits are
 // yesterdays, and yesterday's are the profits two days ago. The array used to
