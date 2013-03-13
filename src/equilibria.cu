@@ -345,7 +345,7 @@ __global__ void device_consumer_choice(int* chosen_manufacturers, int* loyalty, 
     for (int product_id = 0; product_id < num_products; product_id++){
         int cheapest_man = d_get_cheapest_man(price, product_id);
         if (cheapest_man == loyalty[cons_id]){
-            chosen_manufacturers[cons_id * product_id] = cheapest_man;
+            chosen_manufacturers[cons_id + product_id * num_products] = cheapest_man;
         } else {
             float cheapest_price = (float) d_val(price, product_id, cheapest_man, num_manufacturers);
             float scores[NUM_PRODUCTS];
@@ -383,7 +383,7 @@ __global__ void device_consumer_choice(int* chosen_manufacturers, int* loyalty, 
                 score_so_far += scores[man];
                 if (score_so_far >= ran)
                 {
-                    chosen_manufacturers[cons_id * product_id] = man;
+                    chosen_manufacturers[cons_id + product_id * num_products] = man;
                 }
             }
         }
