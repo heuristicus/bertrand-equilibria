@@ -20,8 +20,8 @@
 #define MODIFY_PRICE_COMPUTE COMPUTE_ON_HOST
 //#define MODIFY_PRICE_COMPUTE COMPUTE_ON_DEVICE
 
-#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_HOST
-//#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_DEVICE
+//#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_HOST
+#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_DEVICE
 
 #define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_HOST
 //#define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_DEVICE
@@ -603,15 +603,7 @@ void update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
     {
         // Most purchased-from manufacturer
         int* choices_subarr = &choices[cons_id*num_manufacturers];
-        int most_purchased = get_max_ind(choices_subarr, num_manufacturers);
-
-        // If we purchase more products from a manufacturer to whom we are
-        // not currently loyal to, we switch to the one that we purchased
-        // most from.
-        if (val(choices, cons_id, most_purchased, num_manufacturers) !=
-            val(choices, cons_id, loyalties[cons_id], num_manufacturers)) {
-            loyalties[cons_id] = most_purchased;
-        }
+        loyalties[cons_id] = get_max_ind(choices_subarr, num_manufacturers);
     }
 }
 
@@ -668,14 +660,11 @@ void launch_update_loyalties(int* choices, int* loyalties,
     // Copy the data into the device arrays. Only need to do this for the choices, since that
     // is the only data which is read - the device will overwrite values in the loyalties array.
     cutilSafeCall(cudaMemcpy(dev_choices, choices, choice_memsize, cudaMemcpyHostToDevice));
-//    cutilSafeCall(cudaMemcpy(dev_loyalty, loyalties, loyalty_memsize, cudaMemcpyHostToDevice));
+    cutilSafeCall(cudaMemcpy(dev_loyalty, loyalties, loyalty_memsize, cudaMemcpyHostToDevice));
 
-//    print_int_array(host_loyalty, 3);
     d_update_loyalties<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
 
     cutilSafeCall(cudaMemcpy(loyalties, dev_loyalty, loyalty_memsize, cudaMemcpyDeviceToHost));
-
-//    print_int_array(host_loyalty_res, 3);
 }
 
 // Updates the loyalties of each customer after the purchases for the day have been made.
@@ -684,8 +673,11 @@ __global__ void d_update_loyalties(int* choices, int* loyalties,
                                    unsigned int num_manufacturers,
                                    unsigned int num_customers)
 {
-    int tid = threadIdx.x + blockDim.x*blockIdx.x;
-    loyalties[tid] = d_get_max_ind(choices + tid * num_manufacturers, num_manufacturers);
+    int cons_id = threadIdx.x + blockDim.x*blockIdx.x;
+
+    // Most purchased-from manufacturer
+    int* choices_subarr = &choices[cons_id*num_manufacturers];
+    loyalties[cons_id] = d_get_max_ind(choices_subarr, num_manufacturers);
 }
 
 // Get the index of the maximum value in the given array.
