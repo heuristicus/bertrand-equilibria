@@ -1,14 +1,20 @@
 #!/bin/bash
-gnuplot plotprice.gnu &
+gnuplot << EOF &
+call "plotprice.gnu" $1
+EOF
 PRICEPID=$!
 
-gnuplot plotprofit.gnu &
+gnuplot << EOF &
+call "plotprofit.gnu" $1
+EOF
 PROFITPID=$!
 
-gnuplot plotloyalty.gnu &
+gnuplot << EOF &
+call "plotloyalty.gnu" $1
+EOF
 LOYALTYPID=$!
 
-# echo "Type 'exit' to exit"
+echo "Type 'exit' to exit"
 
 while read line; do
     if [ "$line" == "exit" ]; then

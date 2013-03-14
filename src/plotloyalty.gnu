@@ -1,3 +1,4 @@
+set xrange [0:$0]
 set title "Loyalty Fluctuation"
 set xlabel "Day"
 set ylabel "Number loyal"

@@ -31,5 +31,5 @@ if [ $? -eq 0 ]; then
        sleep 1
    done
    
-   ./plot
+   ./plot $1
 fi

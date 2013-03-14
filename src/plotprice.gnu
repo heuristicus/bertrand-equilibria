@@ -1,3 +1,4 @@
+set xrange [0:$0]
 set title "Daily Prices"
 set xlabel "Day"
 set ylabel "Price (pence)"

@@ -1,3 +1,4 @@
+set xrange [0:$0]
 set title "Daily Profits"
 set xlabel "Day"
 set ylabel "Profit (pence)"
