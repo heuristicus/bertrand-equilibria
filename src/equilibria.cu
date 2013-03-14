@@ -3,6 +3,7 @@
 #include "curand_kernel.h"
 #include "math.h"
 #include "time.h"
+#include "sys/timeb.h"
 #include "stdlib.h"
 #include "limits.h"
 #include "stdio.h"
@@ -21,8 +22,8 @@
 //#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_HOST
 #define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_DEVICE
 
-#define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_HOST
-//#define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_DEVICE
+//#define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_HOST
+#define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_DEVICE
 
 // Direction of price for the given manufacturer.
 // Up means prices are increasing, down is decreasing
@@ -42,7 +43,7 @@
 // The gradient/decay rate of the function used to determine
 // fitness for roulette-wheel selection, which is used to
 // find the manufacturer to buy from
-#define LOYALTY_ALPHA 8.0f
+#define STINGINESS_ALPHA 8.0f
 
 // By how much we multiply the score of the preferred manufacturer
 #define LOYALTY_MULTIPLIER 2.0f
@@ -56,7 +57,7 @@
 #define LOYALTY_ENABLED 1
 
 const char* products[] = {"milk", "bread", "toilet_paper", "butter", "bacon", "cheese"};
-#define NUM_PRODUCTS 6 // DON'T FORGET TO CHANGE THIS!!!
+#define NUM_PRODUCTS 1 // DON'T FORGET TO CHANGE THIS!!!
 //int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
 
 // Arrays mapping manufacturer ID to profit on each day
@@ -344,22 +345,22 @@ double gaussrand()
 
 // Computes the choice made for each product by each consumer. Puts the values for each consumer into the chosen_manufacturers array,
 // which is assumed to be initialised with a size of num_consumers*num_products.
-__global__ void device_consumer_choice(int* chosen_manufacturers, int* loyalty, int* price, unsigned int num_manufacturers, unsigned int num_consumers, unsigned int num_products, curandState* states){
+__global__ void device_consumer_choice(int* chosen_manufacturers, int* loyalty, int* price, unsigned int num_manufacturers, unsigned int num_consumers, unsigned int num_products, curandState* states, int seed){
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    
+
     int cons_id = tid; // Each thread deals with a single consumer
-    curand_init(1234, tid, 0, &states[tid]);
+    curand_init(seed * tid, tid, 0, &states[tid]);
     for (int product_id = 0; product_id < num_products; product_id++){
         int cheapest_man = d_get_cheapest_man(price, product_id);
         if (cheapest_man == loyalty[cons_id]){
-            chosen_manufacturers[cons_id + product_id * num_products] = cheapest_man;
+            chosen_manufacturers[cons_id + product_id * num_consumers] = cheapest_man;
         } else {
             float cheapest_price = (float) d_val(price, product_id, cheapest_man, num_manufacturers);
             float scores[NUM_PRODUCTS];
 
             float total_score = 0.0f;
     
-            for (int man = 0; man < num_manufacturers; man++) 
+            for (int man = 0; man < num_manufacturers; man++)
             {
                 // equiv. of x in function
                 int price_diff = d_val(price, product_id, man, num_manufacturers) - cheapest_price;
@@ -370,7 +371,7 @@ __global__ void device_consumer_choice(int* chosen_manufacturers, int* loyalty, 
                 }
                 else
                 {
-                    score = cheapest_price/(LOYALTY_ALPHA*price_diff + cheapest_price);
+                    score = cheapest_price/(STINGINESS_ALPHA*price_diff + cheapest_price);
                     total_score += score;
                 }
 
@@ -382,7 +383,8 @@ __global__ void device_consumer_choice(int* chosen_manufacturers, int* loyalty, 
                 scores[man] = score;
             }
 
-            float ran = curand_uniform(&states[tid]);
+            float ran = curand_uniform(&states[tid]) * total_score;
+
             float score_so_far = 0.0f;
 
             for (int man = 0; man < num_manufacturers; man++) 
@@ -390,14 +392,19 @@ __global__ void device_consumer_choice(int* chosen_manufacturers, int* loyalty, 
                 score_so_far += scores[man];
                 if (score_so_far >= ran)
                 {
-                    chosen_manufacturers[cons_id + product_id * num_products] = man;
+                    chosen_manufacturers[cons_id + product_id * num_consumers] = man;
+                    break;
                 }
             }
+            
         }
     }
 }
 
-void launch_consumer_choice(int* chosen_manufacturers, int* loyalty, int* price, unsigned int num_manufacturers, unsigned int num_consumers, unsigned int num_products){
+// Launch a kernel to compute the manufacturer that each customer chooses for each product.
+void launch_consumer_choice(int* chosen_manufacturers, int* loyalty, int* price,
+                            unsigned int num_manufacturers, unsigned int num_consumers,
+                            unsigned int num_products){
     int blocks = 1;
     int threadsPerBlock = num_consumers;
   
@@ -405,7 +412,7 @@ void launch_consumer_choice(int* chosen_manufacturers, int* loyalty, int* price,
     int* dev_chosen_manufacturers;
     int* dev_price;
     int loyalty_memsize = num_consumers * sizeof(int);
-    int choose_memsize = num_consumers * sizeof(int); 
+    int choose_memsize = num_consumers * num_products * sizeof(int);
     int price_memsize = num_products * num_manufacturers * sizeof(int);
 
     curandState* dev_states;
@@ -416,20 +423,26 @@ void launch_consumer_choice(int* chosen_manufacturers, int* loyalty, int* price,
     cutilSafeCall(cudaMalloc((void**) &dev_price, price_memsize));
 
     cutilSafeCall(cudaMemcpy(dev_loyalty, loyalty, loyalty_memsize, cudaMemcpyHostToDevice));
-    cutilSafeCall(cudaMemcpy(dev_chosen_manufacturers, chosen_manufacturers, choose_memsize, cudaMemcpyHostToDevice));
+    cutilSafeCall(cudaMemcpy(dev_chosen_manufacturers, chosen_manufacturers, choose_memsize,
+                             cudaMemcpyHostToDevice));
     cutilSafeCall(cudaMemcpy(dev_price, price, price_memsize, cudaMemcpyHostToDevice));
 
-    device_consumer_choice<<<blocks, threadsPerBlock>>>(dev_chosen_manufacturers, dev_price, dev_loyalty, num_manufacturers, num_consumers, num_products, dev_states);
+    device_consumer_choice<<<blocks, threadsPerBlock>>>(dev_chosen_manufacturers, dev_loyalty,
+                                                        dev_price, num_manufacturers, num_consumers,
+                                                        num_products, dev_states, clock());
 
-    cutilSafeCall(cudaMemcpy(dev_loyalty, loyalty, loyalty_memsize, cudaMemcpyDeviceToHost));
-    cutilSafeCall(cudaMemcpy(dev_chosen_manufacturers, chosen_manufacturers, choose_memsize, cudaMemcpyDeviceToHost));
-    cutilSafeCall(cudaMemcpy(dev_price, price, price_memsize, cudaMemcpyDeviceToHost));
+    cutilSafeCall(cudaMemcpy(chosen_manufacturers, dev_chosen_manufacturers, choose_memsize,
+                             cudaMemcpyDeviceToHost));
+    
+    cutilSafeCall(cudaFree(dev_loyalty));
+    cutilSafeCall(cudaFree(dev_price));
+    cutilSafeCall(cudaFree(dev_chosen_manufacturers));
 }
 
 
-// Get the manufacturer ID fom which the consumer chooses to 
-// purchase the given product
-int host_consumer_choice(int* loyalty, int* price, int consumer_id, int product_id, int cheapest_man, int loyalty_enabled, int num_manufacturers) {
+// Get the manufacturer ID fom which the consumer chooses to purchase the given product
+int host_consumer_choice(int* loyalty, int* price, int consumer_id, int product_id,
+                         int cheapest_man, int loyalty_enabled, int num_manufacturers) {
   if (! loyalty_enabled) 
   {
     return cheapest_man;
@@ -459,7 +472,7 @@ int host_consumer_choice(int* loyalty, int* price, int consumer_id, int product_
       }
       else
       {
-        score = cheapest_price/(LOYALTY_ALPHA*price_diff + cheapest_price);
+        score = cheapest_price/(STINGINESS_ALPHA*price_diff + cheapest_price);
         total_score += score;
       }
 
@@ -473,11 +486,6 @@ int host_consumer_choice(int* loyalty, int* price, int consumer_id, int product_
 
     float ran = (float)rand() / RAND_MAX * total_score;
     float score_so_far = 0.0f;
-
-
-    //printf("Scores array: ");
-    //print_array(scores, num_manufacturers);
-    //printf("Rand is %.5f\n", ran);
 
     for (int man = 0; man < num_manufacturers; man++) 
     {
@@ -496,7 +504,7 @@ int host_consumer_choice(int* loyalty, int* price, int consumer_id, int product_
   return -1;
 }
 
-// Get tomorrow's price for the given product ID
+// Get the strategy for the manufacturer based on previous profits
 void host_price_response(profits* profit_history, int manufacturer_id, 
                          int* price_strategy_arr) {
   int current_strategy = price_strategy_arr[manufacturer_id];
@@ -608,40 +616,6 @@ void update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
     }
 }
 
-  /* printf("Creating arrays and references.\n"); */
-  /* int host_cust[6] = {5,10,5,10,7,10}; */
-  /* int host_loyalty[] = {0,0,0}; */
-  /* int cust_memsize = sizeof(host_cust);//sizeof(int*) * 3 + sizeof(int) * 2 * 3; */
-  /* int loyalty_memsize = sizeof(host_loyalty);//3*sizeof(int); */
-  /* int* host_cust_res = (int*) malloc(cust_memsize); */
-  /* int* host_loyalty_res = (int*) malloc(loyalty_memsize); */
-  /* int* dev_cust; */
-  /* int* dev_loyalty; */
-  /* printf("Allocating device memory\n"); */
-  /* cutilSafeCall(cudaMalloc((void**) &dev_cust, cust_memsize)); */
-  /* cutilSafeCall(cudaMalloc((void**) &dev_loyalty, loyalty_memsize)); */
-  /* cutilSafeCall(cudaMemcpy(dev_cust, host_cust, cust_memsize, cudaMemcpyHostToDevice)); */
-  /* cutilSafeCall(cudaMemcpy(dev_loyalty, host_loyalty, loyalty_memsize, cudaMemcpyHostToDevice)); */
-  /* printf("Got to the kernel call\n"); */
-  /* print_int_array(host_loyalty, 3); */
-  /* d_update_loyalties<<<1, 3>>>(dev_cust, dev_loyalty, 2, 3); */
-
-  /* /\* int* dev_loyalty_res; *\/ */
-  /* /\* int** dev_cust_out; *\/ */
-  /* /\* cutilSafeCall(cudaMalloc((void***) &dev_cust_out, cust_memsize)); *\/ */
-  /* /\* cutilSafeCall(cudaMalloc((void**) &dev_loyalty_res, loyalty_memsize)); *\/ */
-
-  /* printf("Device call finished. Copying data from dev to host...\n"); */
-
-  /* cutilSafeCall(cudaMemcpy(host_loyalty_res, dev_loyalty, */
-  /*                          loyalty_memsize, cudaMemcpyDeviceToHost)); */
-  /* /\* cutilSafeCall(cudaMemcpy(host_cust_res, dev_cust,  *\/ */
-  /* /\*                          cust_memsize, cudaMemcpyDeviceToHost)); *\/ */
-
-
-  /* printf("\n\n"); */
-  /* print_int_array(host_loyalty_res, 3); */
-
 // Performs the necessary memory allocations and conversions and launches the
 // kernel function to compute the updated loyalties.
 void launch_update_loyalties(int* choices, int* loyalties, 
@@ -661,11 +635,13 @@ void launch_update_loyalties(int* choices, int* loyalties,
     // Copy the data into the device arrays. Only need to do this for the choices, since that
     // is the only data which is read - the device will overwrite values in the loyalties array.
     cutilSafeCall(cudaMemcpy(dev_choices, choices, choice_memsize, cudaMemcpyHostToDevice));
-    cutilSafeCall(cudaMemcpy(dev_loyalty, loyalties, loyalty_memsize, cudaMemcpyHostToDevice));
 
     d_update_loyalties<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
 
     cutilSafeCall(cudaMemcpy(loyalties, dev_loyalty, loyalty_memsize, cudaMemcpyDeviceToHost));
+
+    cutilSafeCall(cudaFree(dev_loyalty));
+    cutilSafeCall(cudaFree(dev_choices));
 }
 
 // Updates the loyalties of each customer after the purchases for the day have been made.
@@ -743,17 +719,27 @@ void launch_device_price_response(int* price_strategy,
   cutilSafeCall(cudaMalloc((void**) &dev_profit_two_days_ago, mem_size));
   cutilSafeCall(cudaMalloc((void**) &dev_profit_yesterday, mem_size));
 
-  cutilSafeCall(cudaMemcpy(dev_price_strategy, price_strategy, mem_size, cudaMemcpyHostToDevice));
-  cutilSafeCall(cudaMemcpy(dev_profit_two_days_ago, profit_two_days_ago, mem_size, cudaMemcpyHostToDevice));
-  cutilSafeCall(cudaMemcpy(dev_profit_yesterday, profit_yesterday, mem_size, cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_price_strategy, price_strategy, mem_size,
+                           cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_profit_two_days_ago, profit_two_days_ago,
+                           mem_size, cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_profit_yesterday, profit_yesterday,
+                           mem_size, cudaMemcpyHostToDevice));
 
   device_price_response<<<blocks, threadsPerBlock>>>(dev_price_strategy,
                                                      dev_profit_two_days_ago,
                                                      dev_profit_yesterday);
 
-  cutilSafeCall(cudaMemcpy(price_strategy, dev_price_strategy, mem_size, cudaMemcpyDeviceToHost));
-  cutilSafeCall(cudaMemcpy(profit_two_days_ago, dev_profit_two_days_ago, mem_size, cudaMemcpyDeviceToHost));
-  cutilSafeCall(cudaMemcpy(profit_yesterday, dev_profit_yesterday, mem_size, cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(price_strategy, dev_price_strategy, mem_size,
+                           cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(profit_two_days_ago, dev_profit_two_days_ago,
+                           mem_size, cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(profit_yesterday, dev_profit_yesterday,
+                           mem_size, cudaMemcpyDeviceToHost));
+
+  cutilSafeCall(cudaFree(dev_price_strategy));
+  cutilSafeCall(cudaFree(dev_profit_two_days_ago));
+  cutilSafeCall(cudaFree(dev_profit_yesterday));
 }
 
 
@@ -774,12 +760,14 @@ __global__ void device_modify_price(int* strategy_arr,
   
   int price_of_prod = d_val(price_arr, product_id, manufacturer_id, num_manufacturers);
   
-  if (strategy_arr[manufacturer_id] == STRATEGY_UP && price_of_prod <= max_cost_arr[product_id] - PRICE_INCREMENT) 
+  if (strategy_arr[manufacturer_id] == STRATEGY_UP && 
+      price_of_prod <= max_cost_arr[product_id] - PRICE_INCREMENT) 
   {
     int new_price = price_of_prod + PRICE_INCREMENT;
     d_set_val(price_arr, product_id, manufacturer_id, num_manufacturers, new_price);
   }
-  else if (strategy_arr[manufacturer_id] == STRATEGY_DOWN && price_of_prod >= marginal_cost_arr[product_id] + PRICE_INCREMENT) 
+  else if (strategy_arr[manufacturer_id] == STRATEGY_DOWN && 
+           price_of_prod >= marginal_cost_arr[product_id] + PRICE_INCREMENT) 
   {
     int new_price = price_of_prod - PRICE_INCREMENT;
     d_set_val(price_arr, product_id, manufacturer_id, num_manufacturers, new_price);
@@ -815,10 +803,14 @@ void launch_device_modify_price(int* strategy_arr,
   cutilSafeCall(cudaMalloc((void**) &dev_max_cost_arr, prod_mem_size));
   cutilSafeCall(cudaMalloc((void**) &dev_marginal_cost_arr, prod_mem_size));
 
-  cutilSafeCall(cudaMemcpy(dev_strategy_arr, strategy_arr, man_mem_size, cudaMemcpyHostToDevice));
-  cutilSafeCall(cudaMemcpy(dev_price_arr, price_arr, man_prod_mem_size, cudaMemcpyHostToDevice));
-  cutilSafeCall(cudaMemcpy(dev_max_cost_arr, max_cost_arr, prod_mem_size, cudaMemcpyHostToDevice));
-  cutilSafeCall(cudaMemcpy(dev_marginal_cost_arr, marginal_cost_arr, prod_mem_size, cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_strategy_arr, strategy_arr, man_mem_size,
+                           cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_price_arr, price_arr, man_prod_mem_size,
+                           cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_max_cost_arr, max_cost_arr, prod_mem_size,
+                           cudaMemcpyHostToDevice));
+  cutilSafeCall(cudaMemcpy(dev_marginal_cost_arr, marginal_cost_arr, prod_mem_size,
+                           cudaMemcpyHostToDevice));
 
   device_modify_price<<<blocks, threadsPerBlock>>>(dev_strategy_arr,
                                                    dev_price_arr, 
@@ -827,10 +819,19 @@ void launch_device_modify_price(int* strategy_arr,
                                                    num_manufacturers,
                                                    num_products);
 
-  cutilSafeCall(cudaMemcpy(strategy_arr, dev_strategy_arr, man_mem_size, cudaMemcpyDeviceToHost));
-  cutilSafeCall(cudaMemcpy(price_arr, dev_price_arr, man_prod_mem_size, cudaMemcpyDeviceToHost));
-  cutilSafeCall(cudaMemcpy(max_cost_arr, dev_max_cost_arr, prod_mem_size, cudaMemcpyDeviceToHost));
-  cutilSafeCall(cudaMemcpy(marginal_cost_arr, dev_marginal_cost_arr, prod_mem_size, cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(strategy_arr, dev_strategy_arr, man_mem_size,
+                           cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(price_arr, dev_price_arr, man_prod_mem_size,
+                           cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(max_cost_arr, dev_max_cost_arr, prod_mem_size,
+                           cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(marginal_cost_arr, dev_marginal_cost_arr,
+                           prod_mem_size, cudaMemcpyDeviceToHost));
+
+  cutilSafeCall(cudaFree(dev_strategy_arr));
+  cutilSafeCall(cudaFree(dev_price_arr));
+  cutilSafeCall(cudaFree(dev_max_cost_arr));
+  cutilSafeCall(cudaFree(dev_marginal_cost_arr));
 }
 
 
@@ -839,7 +840,7 @@ void host_equilibriate(int* price, int* loyalty,
                        int* marginal_cost, int* max_cost, 
                        int days, int loyalty_enabled, 
                        char* profitFilename, char* priceFilename,
-                       char* loyaltyFilename)
+                       char* loyaltyFilename, int seed)
 {
   int day_num;
   int man_id, prod_id, cons_id;
@@ -925,28 +926,34 @@ void host_equilibriate(int* price, int* loyalty,
           set_val(cons_choices, cons_id, picks[cons_id], NUM_MANUFACTURERS, new_val);
         }
         int* counts = calculate_num_purchases(picks, NUM_CONSUMERS, NUM_MANUFACTURERS);
-        printf("Number of purchases for each product:\n");
-        print_int_array(counts, NUM_MANUFACTURERS);
 
-        printf("ProfitToday before prod %d: %d\n", prod_id, profit->today[0]);
+        printf("Printing picks for each consumer.\n");
+        print_int_array(picks, NUM_CONSUMERS);
+        printf("Number of purchases for each product:\n");
+//        print_int_array(counts, NUM_MANUFACTURERS);
+
+//        printf("ProfitToday before prod %d: %d\n", prod_id, profit->today[0]);
       
         int* price_arr_point = &price[prod_id*NUM_MANUFACTURERS];
       
         profit_for_product(counts, profit->today, price_arr_point, 
                            marginal_cost[prod_id], NUM_MANUFACTURERS);
-        print_profit_struct(profit, NUM_MANUFACTURERS);
+        //       print_profit_struct(profit, NUM_MANUFACTURERS);
       }
     }
     else
     {
-      int* picks_2d = (int*)malloc(sizeof(int) * NUM_CONSUMERS * NUM_PRODUCTS);
+        int* picks_2d = (int*)calloc(NUM_CONSUMERS * NUM_PRODUCTS, sizeof(int));
       
-      launch_consumer_choice(picks_2d, 
-                             loyalty,
-                             price, 
-                             NUM_MANUFACTURERS,
-                             NUM_CONSUMERS,
-                             NUM_PRODUCTS);
+        launch_consumer_choice(picks_2d, 
+                               loyalty,
+                               price, 
+                               NUM_MANUFACTURERS,
+                               NUM_CONSUMERS,
+                               NUM_PRODUCTS);
+      
+      printf("Printing scores from picks.\n");
+      print_2d_1d_int_array(picks_2d, NUM_PRODUCTS, NUM_CONSUMERS);
       
       for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
         int cheapest = get_cheapest_man(price, prod_id);
@@ -1171,10 +1178,12 @@ int main(int argc, char** argv)
   // If more than 7 arguments received, there should be a seed present so use
   // the seed to initialise the random number generator. Otherwise, just use
   // the current time.
+  int seed;
   if (argc > 7)
-      srand(atoi(argv[7]));
+      seed = atoi(argv[7]);
   else 
-      srand(time(NULL));
+      seed = time(NULL);
+  srand(seed);
   /* int i; */
   /* for (i = 0; i < 100; ++i) { */
   /*   printf("%lf\n", positive_gaussrand() + 1); */
@@ -1192,7 +1201,7 @@ int main(int argc, char** argv)
   int* price_strategy = init_strategy();
   profits* profit_history = init_profits();
 
-  host_equilibriate(price, loyalty, profit_history, price_strategy, marginal_cost, max_cost, days, LOYALTY_ENABLED, profitFilename, priceFilename, loyaltyFilename);
+  host_equilibriate(price, loyalty, profit_history, price_strategy, marginal_cost, max_cost, days, LOYALTY_ENABLED, profitFilename, priceFilename, loyaltyFilename, seed);
 
   clock_t end_time = clock();
   time(&end);
@@ -1318,4 +1327,5 @@ int main(int argc, char** argv)
   
   // exit and clean up device status
   cudaThreadExit();*/
+  cudaThreadExit(); 
 }
