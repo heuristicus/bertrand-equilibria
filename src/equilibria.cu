@@ -7,18 +7,16 @@
 #include "limits.h"
 #include "stdio.h"
 
-#define ITERS 10
-
 //#define BLOCK_SIZE 32
 //#define GRID_SIZE 32
 
 #define COMPUTE_ON_DEVICE 50
 #define COMPUTE_ON_HOST 51
-#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_HOST
-//#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_DEVICE
+//#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_HOST
+#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_DEVICE
 
-#define MODIFY_PRICE_COMPUTE COMPUTE_ON_HOST
-//#define MODIFY_PRICE_COMPUTE COMPUTE_ON_DEVICE
+//#define MODIFY_PRICE_COMPUTE COMPUTE_ON_HOST
+#define MODIFY_PRICE_COMPUTE COMPUTE_ON_DEVICE
 
 //#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_HOST
 #define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_DEVICE
@@ -216,6 +214,8 @@ int* init_max_cost(int* marginal_cost){
 
 // Rand*MC*3 (roughly)
 // Initialises the prices for each product.
+// Price array: first dimension product, second dimension manufacturer 
+// (flattened to 1d)
 int* init_prices(int* marginal_cost)
 {
   int i;
@@ -497,7 +497,8 @@ int host_consumer_choice(int* loyalty, int* price, int consumer_id, int product_
 }
 
 // Get tomorrow's price for the given product ID
-void host_price_response(int* marginal_cost, int* max_cost, profits* profit_history, int manufacturer_id, int product_id, int* price_strategy_arr, int* price_arr, int num_manufacturers) {
+void host_price_response(profits* profit_history, int manufacturer_id, 
+                         int* price_strategy_arr) {
   int current_strategy = price_strategy_arr[manufacturer_id];
   int profit1 = profit_history->two_days_ago[manufacturer_id];
   int profit2 = profit_history->yesterday[manufacturer_id];
@@ -864,6 +865,16 @@ void host_equilibriate(int* price, int* loyalty,
       printf("Launch_device_price_response successful!\n");
       print_int_array(price_strategy, NUM_MANUFACTURERS);
 
+    }
+    else 
+    {
+      for (man_id = 0; man_id < NUM_MANUFACTURERS; man_id++){
+        host_price_response(profit, man_id, price_strategy);
+      }
+    }
+
+    if (MODIFY_PRICE_COMPUTE == COMPUTE_ON_DEVICE)
+    {
       launch_device_modify_price(price_strategy, 
                                  price,
                                  max_cost,
@@ -874,20 +885,17 @@ void host_equilibriate(int* price, int* loyalty,
       printf("Launch_device_modify_price successful!\n");
       print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
     }
-    else 
+    else
     {
       for (man_id = 0; man_id < NUM_MANUFACTURERS; man_id++){
         for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
-          host_price_response(marginal_cost, max_cost, profit, 
-                              man_id, prod_id, price_strategy, 
-                              price, NUM_MANUFACTURERS);
-          modify_price(marginal_cost, max_cost, man_id, 
-                       prod_id, price_strategy[man_id], 
+          modify_price(marginal_cost, max_cost, man_id,
+                       prod_id, price_strategy[man_id],
                        price, NUM_MANUFACTURERS);
-
         }
       }
     }
+    
 
     printf("New prices (line = product):\n");
     print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
@@ -990,7 +998,7 @@ void host_equilibriate(int* price, int* loyalty,
     // swap the pointers inside the profit struct so that we can overwrite without needing to free
     swap_profit_pointers(profit, NUM_MANUFACTURERS);
 
-    printf("A new day dawns.\n\n\n\n\n\n");
+    printf("A new day dawns (%d).\n\n\n\n\n\n", day_num);
   }
 
   fclose(profitFile);
@@ -1019,6 +1027,7 @@ void put_plot_line(FILE* fp, int* arr, unsigned int size, int x)
   }
 
   fprintf(fp, "\n");
+  fflush(fp);
 }
 
 int get_min_ind(int* array, unsigned int size)
