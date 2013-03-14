@@ -14,8 +14,8 @@
 
 #define COMPUTE_ON_DEVICE 50
 #define COMPUTE_ON_HOST 51
-//#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_HOST
-#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_DEVICE
+#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_HOST
+//#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_DEVICE
 
 #define MODIFY_PRICE_COMPUTE COMPUTE_ON_HOST
 //#define MODIFY_PRICE_COMPUTE COMPUTE_ON_DEVICE
@@ -517,14 +517,14 @@ void host_price_response(int* marginal_cost, int* max_cost, profits* profit_hist
   else if (profit1 == profit2) {
     price_strategy_arr[manufacturer_id] = STRATEGY_DOWN;
   }
-
-  modify_price(marginal_cost, max_cost, manufacturer_id, product_id, price_strategy_arr[manufacturer_id], price_arr, num_manufacturers);
 }
 
 // Modifies the price the manufacturer charges for the given product based on
 // the current strategy. The price can never exceed some multiple of the marginal
 // cost, and can never fall below the marginal cost.
-void modify_price(int* marginal_cost, int* max_cost, int manufacturer_id, int product_id, int strategy, int* price_arr, int num_manufacturers)
+void modify_price(int* marginal_cost, int* max_cost, 
+                  int manufacturer_id, int product_id, 
+                  int strategy, int* price_arr, int num_manufacturers)
 {
   int price_of_prod = val(price_arr, product_id, manufacturer_id, num_manufacturers);
   
@@ -889,6 +889,10 @@ void host_equilibriate(int* price, int* loyalty,
           host_price_response(marginal_cost, max_cost, profit, 
                               man_id, prod_id, price_strategy, 
                               price, NUM_MANUFACTURERS);
+          modify_price(marginal_cost, max_cost, man_id, 
+                       prod_id, price_strategy[man_id], 
+                       price, NUM_MANUFACTURERS);
+
         }
       }
     }
