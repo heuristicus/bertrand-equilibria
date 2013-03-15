@@ -1,18 +1,18 @@
 #!/bin/bash
-gnuplot << EOF &
+gnuplot -geometry 1280x450 << EOF &
 call "plotprice.gnu" $1
 EOF
 PRICEPID=$!
 
-gnuplot << EOF &
+gnuplot -geometry 1280x450 << EOF &
 call "plotprofit.gnu" $1
 EOF
 PROFITPID=$!
 
-gnuplot << EOF &
-call "plotloyalty.gnu" $1
-EOF
-LOYALTYPID=$!
+#gnuplot << EOF &
+#call "plotloyalty.gnu" $1
+#EOF
+#LOYALTYPID=$!
 
 echo "Type 'exit' to exit"
 
@@ -27,4 +27,3 @@ while read line; do
 done
 
 #read -p "Type 'exit' to exit: "
-

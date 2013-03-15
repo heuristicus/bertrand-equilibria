@@ -20,8 +20,8 @@
 //#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_HOST
 #define PRICE_RESPONSE_COMPUTE COMPUTE_ON_DEVICE
 
-#define MODIFY_PRICE_COMPUTE COMPUTE_ON_HOST
-//#define MODIFY_PRICE_COMPUTE COMPUTE_ON_DEVICE
+//#define MODIFY_PRICE_COMPUTE COMPUTE_ON_HOST
+#define MODIFY_PRICE_COMPUTE COMPUTE_ON_DEVICE
 
 //#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_HOST
 #define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_DEVICE
@@ -47,10 +47,10 @@
 // The gradient/decay rate of the function used to determine
 // fitness for roulette-wheel selection, which is used to
 // find the manufacturer to buy from
-#define STINGINESS_ALPHA 8.0f
+#define STINGINESS_ALPHA 30.0f
 
 // By how much we multiply the score of the preferred manufacturer
-#define LOYALTY_MULTIPLIER 2.0f
+#define LOYALTY_MULTIPLIER 1.5f
 
 // What additional price over the cheapest we are willing to consider.
 // E.g. 0.5 means we never buy products 50% more expensive than cheapest
