@@ -1,0 +1,63 @@
+loyalty=1
+mans=100
+cons=1000
+days=100
+
+
+- host
+Total price response time: 0.2000000477 ms
+Average price response time: 0.0020000006 ms
+
+1x
+
+- price response device normal
+Total price response time: 2.1120004654 ms
+Average price response time: 0.0211200044 ms
+
+10.56x slowdown
+
+- price response device shmem
+Total price response time: 2.0570006371 ms
+Average price response time: 0.0205700062 ms
+
+1.0267378761x speedup
+
+--------------------
+
+- host
+Total loyalty update time: 32.3190155029 ms
+Average loyalty update time: 0.3231901526 ms
+
+1x
+
+- loyalty device normal
+Total loyalty update time: 2.1010005474 ms
+Average loyalty update time: 0.0210100058 ms
+
+15.38x speedup
+
+- loyalty device shmem
+Total loyalty update time: 2.1490008831 ms
+Average loyalty update time: 0.0214900095 ms
+
+1.029x slowdown
+
+- loyalty device shmem coop
+Total loyalty update time: 2.1780004501 ms
+Average loyalty update time: 0.0217800047 ms
+
+1.013x slowdown
+
+--------------------
+
+host
+Total modify price time: 1.1299996376 ms
+Average modify price time: 0.0112999966 ms
+
+1x
+
+modify price device normal
+Total modify price time: 0.8180004954 ms
+Average modify price time: 0.0081800045 ms
+
+1.38x speedup

@@ -9,7 +9,7 @@
 #include "stdio.h"
 
 // Whether to print lots about the current values to stdout
-#define VERBOSE 1
+#define VERBOSE 0
 
 // Whether the consumers choose which product to buy based on loyalty.
 // Otherwise, they just pick the cheapest
@@ -20,8 +20,8 @@
 //#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_HOST
 #define PRICE_RESPONSE_COMPUTE COMPUTE_ON_DEVICE
 
-//#define MODIFY_PRICE_COMPUTE COMPUTE_ON_HOST
-#define MODIFY_PRICE_COMPUTE COMPUTE_ON_DEVICE
+#define MODIFY_PRICE_COMPUTE COMPUTE_ON_HOST
+//#define MODIFY_PRICE_COMPUTE COMPUTE_ON_DEVICE
 
 //#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_HOST
 #define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_DEVICE
@@ -100,6 +100,9 @@ float loyalty_update_total_millis;
 
 int price_response_count;
 float price_response_total_millis;
+
+int modify_price_count;
+float modify_price_total_millis;
 
 // dim1 = first dimension, dim2 is second
 // So to do arr[1][5] -> idx(1, 5, width)
@@ -885,12 +888,20 @@ void launch_device_modify_price(int* strategy_arr,
   cutilSafeCall(cudaMemcpy(dev_marginal_cost_arr, marginal_cost_arr, prod_mem_size,
                            cudaMemcpyHostToDevice));
 
+  unsigned int timer = 0;
+  cutilCheckError(cutCreateTimer(&timer));
+  cutilCheckError(cutStartTimer(timer));  
+
   device_modify_price<<<blocks, threadsPerBlock>>>(dev_strategy_arr,
                                                    dev_price_arr, 
                                                    dev_max_cost_arr,
                                                    dev_marginal_cost_arr,
                                                    num_manufacturers,
                                                    num_products);
+
+  cutilCheckError(cutStopTimer(timer));
+  modify_price_total_millis += cutGetTimerValue(timer);
+  modify_price_count++;
 
   cutilSafeCall(cudaMemcpy(strategy_arr, dev_strategy_arr, man_mem_size,
                            cudaMemcpyDeviceToHost));
@@ -907,18 +918,17 @@ void launch_device_modify_price(int* strategy_arr,
   cutilSafeCall(cudaFree(dev_marginal_cost_arr));
 }
 
-void print_timer_values() {
-  if (UPDATE_LOYALTIES_COMPUTE == COMPUTE_ON_DEVICE)
-  {
-    float loyalty_avg_update_time = (float)loyalty_update_total_millis / (float)loyalty_update_count;
-    printf("Total loyalty update time: %.10f ms\nAverage loyalty update time: %.10f ms\n\n", loyalty_update_total_millis, loyalty_avg_update_time);
-  }
-  
-  if (PRICE_RESPONSE_COMPUTE == COMPUTE_ON_DEVICE)
-  {
-    float price_response_avg_time = (float)price_response_total_millis / (float)price_response_count;
-    printf("Total price response time: %.10f ms\nAverage price response time: %.10f ms\n\n", price_response_total_millis, price_response_avg_time);
-  }
+void print_timer_values()
+{
+  float loyalty_avg_update_time = (float)loyalty_update_total_millis / (float)loyalty_update_count;
+  printf("Total loyalty update time: %.10f ms\nAverage loyalty update time: %.10f ms\n\n", loyalty_update_total_millis, loyalty_avg_update_time);
+
+
+  float price_response_avg_time = (float)price_response_total_millis / (float)price_response_count;
+  printf("Total price response time: %.10f ms\nAverage price response time: %.10f ms\n\n", price_response_total_millis, price_response_avg_time);
+
+  float modify_price_avg_time = (float)modify_price_total_millis / (float)modify_price_count;
+  printf("Total modify price time: %.10f ms\nAverage modify price time: %.10f ms\n\n", modify_price_total_millis, modify_price_avg_time);
 }
 
 void host_equilibriate(int* price, int* loyalty,
@@ -960,9 +970,17 @@ void host_equilibriate(int* price, int* loyalty,
     }
     else 
     {
+      unsigned int timer = 0;
+      cutilCheckError(cutCreateTimer(&timer));
+      cutilCheckError(cutStartTimer(timer));  
+
       for (man_id = 0; man_id < NUM_MANUFACTURERS; man_id++){
         host_price_response(profit, man_id, price_strategy);
       }
+
+      cutilCheckError(cutStopTimer(timer));
+      price_response_total_millis += cutGetTimerValue(timer);
+      price_response_count++;
     }
 
     if (MODIFY_PRICE_COMPUTE == COMPUTE_ON_DEVICE)
@@ -982,6 +1000,10 @@ void host_equilibriate(int* price, int* loyalty,
     }
     else
     {
+      unsigned int timer = 1;
+      cutilCheckError(cutCreateTimer(&timer));
+      cutilCheckError(cutStartTimer(timer));  
+  
       for (man_id = 0; man_id < NUM_MANUFACTURERS; man_id++){
         for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
           modify_price(marginal_cost, max_cost, man_id,
@@ -989,6 +1011,10 @@ void host_equilibriate(int* price, int* loyalty,
                        price, NUM_MANUFACTURERS);
         }
       }
+
+      cutilCheckError(cutStopTimer(timer));
+      modify_price_total_millis += cutGetTimerValue(timer);
+      modify_price_count++;
     }
     
     if (VERBOSE) 
@@ -1091,7 +1117,15 @@ void host_equilibriate(int* price, int* loyalty,
     
     if (UPDATE_LOYALTIES_COMPUTE == COMPUTE_ON_HOST) 
     {
+      unsigned int timer = 2;
+      cutilCheckError(cutCreateTimer(&timer));
+      cutilCheckError(cutStartTimer(timer));  
+
       update_loyalties(cons_choices, loyalty, NUM_CONSUMERS, NUM_MANUFACTURERS);
+
+      cutilCheckError(cutStopTimer(timer));
+      loyalty_update_total_millis += cutGetTimerValue(timer);
+      loyalty_update_count++;
     }
     else
     {
