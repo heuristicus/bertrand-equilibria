@@ -9,7 +9,7 @@
 #include "stdio.h"
 
 // Whether to print lots about the current values to stdout
-#define VERBOSE 0
+#define VERBOSE 1
 
 // Whether the consumers choose which product to buy based on loyalty.
 // Otherwise, they just pick the cheapest
@@ -35,10 +35,11 @@
 #define STRATEGY_UP 0
 #define STRATEGY_DOWN 1
 
-#define NUM_MANUFACTURERS 100
+#define NUM_MANUFACTURERS 2
 #define NUM_CONSUMERS 1000
-#define MAX_MARGINAL 250
-#define PRICE_INCREMENT 5
+#define BASE_MARGINAL 100
+#define MAX_MARGINAL BASE_MARGINAL*3
+#define PRICE_INCREMENT 2
 // The price of any product cannot exceed this value multiplied by the marginal
 // cost for that product.
 #define MAX_PRICE_MULTIPLIER 5.0f
@@ -60,7 +61,7 @@
 #define LOYALTY_THREADS_PER_BLOCK NUM_CONSUMERS/LOYALTY_NBLOCKS // This needs to change if the number of customers changes
 #define LOYALTY_SHAREDSIZE LOYALTY_THREADS_PER_BLOCK*NUM_MANUFACTURERS
 
-#define NUM_PRODUCTS 6
+#define NUM_PRODUCTS 1
 
 #define PRICE_RESPONSE_SHAREDSIZE NUM_MANUFACTURERS
 
@@ -205,7 +206,7 @@ int* init_marginal_cost()
     for (i = 0; i < NUM_PRODUCTS; ++i) {
         float rval = (float)rand()/RAND_MAX;
         //marginal_cost[i] = (int)(rval * MAX_MARGINAL);
-        marginal_cost[i] = 100+(i*10);
+        marginal_cost[i] = BASE_MARGINAL+(i*(BASE_MARGINAL/10));
     
 //    printf("Marginal cost for %s is %d.\n", products[i], marginal_cost[i]);
     }
