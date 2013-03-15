@@ -8,9 +8,6 @@
 #include "limits.h"
 #include "stdio.h"
 
-//#define BLOCK_SIZE 32
-//#define GRID_SIZE 32
-
 #define COMPUTE_ON_DEVICE 50
 #define COMPUTE_ON_HOST 51
 //#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_HOST
@@ -22,8 +19,8 @@
 //#define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_HOST
 #define UPDATE_LOYALTIES_COMPUTE COMPUTE_ON_DEVICE
 
-//#define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_HOST
-#define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_DEVICE
+#define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_HOST
+//#define CONSUMER_CHOICE_COMPUTE COMPUTE_ON_DEVICE
 
 // Direction of price for the given manufacturer.
 // Up means prices are increasing, down is decreasing
@@ -31,8 +28,8 @@
 #define STRATEGY_UP 0
 #define STRATEGY_DOWN 1
 
-#define NUM_MANUFACTURERS 2
-#define NUM_CONSUMERS 100
+#define NUM_MANUFACTURERS 10
+#define NUM_CONSUMERS 1000
 #define MAX_MARGINAL 250
 #define BASE_INCOME 20000
 #define PRICE_INCREMENT 5
@@ -56,8 +53,13 @@
 // Otherwise, they just pick the cheapest
 #define LOYALTY_ENABLED 1
 
+// Define the number of blocks and shared memory sizes for the device functions
+#define LOYALTY_NBLOCKS 10
+#define LOYALTY_THREADS_PER_BLOCK 100 // This needs to change if the number of customers changes
+#define LOYALTY_SHAREDSIZE LOYALTY_THREADS_PER_BLOCK*NUM_MANUFACTURERS
+
 const char* products[] = {"milk", "bread", "toilet_paper", "butter", "bacon", "cheese"};
-#define NUM_PRODUCTS 1 // DON'T FORGET TO CHANGE THIS!!!
+#define NUM_PRODUCTS 6 // DON'T FORGET TO CHANGE THIS!!!
 //int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
 
 // Arrays mapping manufacturer ID to profit on each day
@@ -88,6 +90,9 @@ __global__ void d_update_loyalties(int* choices, int* loyalties, unsigned int nu
                                    unsigned int num_customers);
 void launch_update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
                              unsigned int num_manufacturers);
+
+int loyalty_update_count;
+float loyalty_update_total_millis;
 
 // dim1 = first dimension, dim2 is second
 // So to do arr[1][5] -> idx(1, 5, width)
@@ -616,13 +621,46 @@ void update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
     }
 }
 
+// Updates the loyalties of each customer after the purchases for the day have been made.
+// The number of threads should be the number of consumers.
+__global__ void d_update_loyalties_shmem(int* choices, int* loyalties, 
+                                   unsigned int num_manufacturers,
+                                   unsigned int num_customers)
+{
+    int cons_id = threadIdx.x + blockDim.x*blockIdx.x;
+    int tid = threadIdx.x;
+
+    __shared__ int c_shared[LOYALTY_SHAREDSIZE];
+    int global_ref = cons_id*num_manufacturers;
+    int shared_ref = tid*num_manufacturers;
+
+    for (int i = 0; i < num_manufacturers; i++){
+        c_shared[shared_ref + i] = choices[global_ref + i];
+    }
+    
+    // Pointer to the start of the array for this consumer.
+    int* choices_subarr = &c_shared[shared_ref];
+    // Get the most purchased-from manufacturer and set loyalty to it.
+    loyalties[cons_id] = d_get_max_ind(choices_subarr, num_manufacturers);
+}
+
+__global__ void d_update_loyalties(int* choices, int* loyalties, 
+                                   unsigned int num_manufacturers,
+                                   unsigned int num_customers){
+    int cons_id = threadIdx.x + blockDim.x*blockIdx.x;
+
+    // Most purchased-from manufacturer
+    int* choices_subarr = &choices[cons_id*num_manufacturers];
+    loyalties[cons_id] = d_get_max_ind(choices_subarr, num_manufacturers);
+}
+
 // Performs the necessary memory allocations and conversions and launches the
 // kernel function to compute the updated loyalties.
 void launch_update_loyalties(int* choices, int* loyalties, 
                              unsigned int num_consumers,
                              unsigned int num_manufacturers)
 {
-    int nblocks = 1, nthreads = num_consumers;
+    int nblocks = LOYALTY_NBLOCKS, nthreads = LOYALTY_THREADS_PER_BLOCK;
     int choice_memsize = num_consumers * num_manufacturers * sizeof(int);
     int loyalty_memsize = num_consumers * sizeof(int);
     int* dev_choices;
@@ -636,7 +674,16 @@ void launch_update_loyalties(int* choices, int* loyalties,
     // is the only data which is read - the device will overwrite values in the loyalties array.
     cutilSafeCall(cudaMemcpy(dev_choices, choices, choice_memsize, cudaMemcpyHostToDevice));
 
-    d_update_loyalties<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
+    unsigned int timer = 0;
+    cutilCheckError(cutCreateTimer(&timer));
+    cutilCheckError(cutStartTimer(timer));  
+
+//    d_update_loyalties<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
+    d_update_loyalties_shmem<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
+
+    cutilCheckError(cutStopTimer(timer));
+    loyalty_update_total_millis += cutGetTimerValue(timer);
+    loyalty_update_count++;
 
     cutilSafeCall(cudaMemcpy(loyalties, dev_loyalty, loyalty_memsize, cudaMemcpyDeviceToHost));
 
@@ -644,18 +691,7 @@ void launch_update_loyalties(int* choices, int* loyalties,
     cutilSafeCall(cudaFree(dev_choices));
 }
 
-// Updates the loyalties of each customer after the purchases for the day have been made.
-// The number of threads should be the number of consumers.
-__global__ void d_update_loyalties(int* choices, int* loyalties, 
-                                   unsigned int num_manufacturers,
-                                   unsigned int num_customers)
-{
-    int cons_id = threadIdx.x + blockDim.x*blockIdx.x;
 
-    // Most purchased-from manufacturer
-    int* choices_subarr = &choices[cons_id*num_manufacturers];
-    loyalties[cons_id] = d_get_max_ind(choices_subarr, num_manufacturers);
-}
 
 // Get the index of the maximum value in the given array.
 __device__ int d_get_max_ind(int* array, unsigned int size)
@@ -1007,6 +1043,9 @@ void host_equilibriate(int* price, int* loyalty,
 
     printf("A new day dawns (%d).\n\n\n\n\n\n", day_num);
   }
+
+  float loyalty_avg_update_time = (float)loyalty_update_total_millis/(float)loyalty_update_count;
+  printf("Total loyalty update time (ms): %.10f\nAverage loyalty update time (ms): %.10f\n", loyalty_update_total_millis, loyalty_avg_update_time);
 
   fclose(profitFile);
   fclose(priceFile);
