@@ -8,6 +8,13 @@
 #include "limits.h"
 #include "stdio.h"
 
+// Whether to print lots about the current values to stdout
+#define VERBOSE 0
+
+// Whether the consumers choose which product to buy based on loyalty.
+// Otherwise, they just pick the cheapest
+#define LOYALTY_ENABLED 1
+
 #define COMPUTE_ON_DEVICE 50
 #define COMPUTE_ON_HOST 51
 //#define PRICE_RESPONSE_COMPUTE COMPUTE_ON_HOST
@@ -28,8 +35,8 @@
 #define STRATEGY_UP 0
 #define STRATEGY_DOWN 1
 
-#define NUM_MANUFACTURERS 2
-#define NUM_CONSUMERS 100
+#define NUM_MANUFACTURERS 100
+#define NUM_CONSUMERS 1000
 #define MAX_MARGINAL 250
 #define PRICE_INCREMENT 5
 // The price of any product cannot exceed this value multiplied by the marginal
@@ -48,16 +55,14 @@
 // E.g. 0.5 means we never buy products 50% more expensive than cheapest
 #define RIPOFF_MULTIPLIER 1.0f
 
-// Whether the consumers choose which product to buy based on loyalty.
-// Otherwise, they just pick the cheapest
-#define LOYALTY_ENABLED 1
-
 // Define the number of blocks and shared memory sizes for the device functions
-#define LOYALTY_NBLOCKS 10
+#define LOYALTY_NBLOCKS 100
 #define LOYALTY_THREADS_PER_BLOCK NUM_CONSUMERS/LOYALTY_NBLOCKS // This needs to change if the number of customers changes
 #define LOYALTY_SHAREDSIZE LOYALTY_THREADS_PER_BLOCK*NUM_MANUFACTURERS
 
 #define NUM_PRODUCTS 6
+
+#define PRICE_RESPONSE_SHAREDSIZE NUM_MANUFACTURERS
 
 // Arrays mapping manufacturer ID to profit on each day
 typedef struct
@@ -88,8 +93,12 @@ __global__ void d_update_loyalties(int* choices, int* loyalties, unsigned int nu
 void launch_update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
                              unsigned int num_manufacturers);
 
+// Values for timing device functions
 int loyalty_update_count;
 float loyalty_update_total_millis;
+
+int price_response_count;
+float price_response_total_millis;
 
 // dim1 = first dimension, dim2 is second
 // So to do arr[1][5] -> idx(1, 5, width)
@@ -294,7 +303,10 @@ profits* init_profits()
 
 // Computes the choice made for each product by each consumer. Puts the values for each consumer into the chosen_manufacturers array,
 // which is assumed to be initialised with a size of num_consumers*num_products.
-__global__ void device_consumer_choice(int* chosen_manufacturers, int* loyalty, int* price, unsigned int num_manufacturers, unsigned int num_consumers, unsigned int num_products, curandState* states, int seed){
+__global__ void device_consumer_choice(
+  int* chosen_manufacturers, int* loyalty, int* price, 
+  unsigned int num_manufacturers, unsigned int num_consumers, 
+  unsigned int num_products, curandState* states, int seed){
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
 
     int cons_id = tid; // Each thread deals with a single consumer
@@ -691,7 +703,6 @@ __device__ int d_get_max_ind(int* array, unsigned int size)
 __global__ void device_price_response(int* price_strategy,
                                       int* profit_two_days_ago, 
                                       int* profit_yesterday) {
-
   const int tid = threadIdx.x + blockDim.x*blockIdx.x;
   const int manufacturer_id = tid;
 
@@ -713,6 +724,40 @@ __global__ void device_price_response(int* price_strategy,
   }
   else if (profit1 == profit2) {
     price_strategy[manufacturer_id] = STRATEGY_DOWN;
+  }
+}
+
+// Get tomorrow's strategy for each manufacturer
+// This sets strategy only. Price needs to be set separately.
+// Number of threads should be num of manufacturers
+__global__ void device_price_response_shmem(int* price_strategy,
+                                      int* profit_two_days_ago, 
+                                      int* profit_yesterday) {
+  const int tid = threadIdx.x + blockDim.x*blockIdx.x;
+  const int man_id = tid;
+
+  __shared__ int current_strategy[PRICE_RESPONSE_SHAREDSIZE];
+  __shared__ int profit1[PRICE_RESPONSE_SHAREDSIZE];
+  __shared__ int profit2[PRICE_RESPONSE_SHAREDSIZE];
+
+  current_strategy[man_id] = price_strategy[man_id];
+  profit1[man_id] = profit_two_days_ago[man_id];
+  profit2[man_id] = profit_yesterday[man_id];
+  
+  // If profit decreased, switch strategy
+  if (profit1[man_id] > profit2[man_id])
+  {
+    if (current_strategy[man_id] == STRATEGY_UP)
+    {
+      price_strategy[man_id] = STRATEGY_DOWN;
+    }
+    else
+    {
+      price_strategy[man_id] = STRATEGY_UP;
+    }
+  }
+  else if (profit1[man_id] == profit2[man_id]) {
+    price_strategy[man_id] = STRATEGY_DOWN;
   }
 }
 
@@ -740,9 +785,22 @@ void launch_device_price_response(int* price_strategy,
   cutilSafeCall(cudaMemcpy(dev_profit_yesterday, profit_yesterday,
                            mem_size, cudaMemcpyHostToDevice));
 
-  device_price_response<<<blocks, threadsPerBlock>>>(dev_price_strategy,
+
+  unsigned int timer = 0;
+  cutilCheckError(cutCreateTimer(&timer));
+  cutilCheckError(cutStartTimer(timer));  
+
+  /* device_price_response<<<blocks, threadsPerBlock>>>(dev_price_strategy, */
+  /*                                                    dev_profit_two_days_ago, */
+  /*                                                    dev_profit_yesterday); */
+
+  device_price_response_shmem<<<blocks, threadsPerBlock>>>(dev_price_strategy,
                                                      dev_profit_two_days_ago,
                                                      dev_profit_yesterday);
+
+  cutilCheckError(cutStopTimer(timer));
+  price_response_total_millis += cutGetTimerValue(timer);
+  price_response_count++;
 
   cutilSafeCall(cudaMemcpy(price_strategy, dev_price_strategy, mem_size,
                            cudaMemcpyDeviceToHost));
@@ -848,6 +906,19 @@ void launch_device_modify_price(int* strategy_arr,
   cutilSafeCall(cudaFree(dev_marginal_cost_arr));
 }
 
+void print_timer_values() {
+  if (UPDATE_LOYALTIES_COMPUTE == COMPUTE_ON_DEVICE)
+  {
+    float loyalty_avg_update_time = (float)loyalty_update_total_millis / (float)loyalty_update_count;
+    printf("Total loyalty update time: %.10f ms\nAverage loyalty update time: %.10f ms\n\n", loyalty_update_total_millis, loyalty_avg_update_time);
+  }
+  
+  if (PRICE_RESPONSE_COMPUTE == COMPUTE_ON_DEVICE)
+  {
+    float price_response_avg_time = (float)price_response_total_millis / (float)price_response_count;
+    printf("Total price response time: %.10f ms\nAverage price response time: %.10f ms\n\n", price_response_total_millis, price_response_avg_time);
+  }
+}
 
 void host_equilibriate(int* price, int* loyalty,
                        profits* profit, int* price_strategy,
@@ -865,12 +936,15 @@ void host_equilibriate(int* price, int* loyalty,
   
   for (day_num = 0; day_num < days; day_num++)
   {
-    printf("Old prices (line = product):\n");
-    print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
+    if (VERBOSE)
+    {
+      printf("Old prices (line = product):\n");
+      print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
 
-    printf("Strategies (0 is up, 1 is down): \n");
-    print_int_array(price_strategy, NUM_MANUFACTURERS);
- 
+      printf("Strategies (0 is up, 1 is down): \n");
+      print_int_array(price_strategy, NUM_MANUFACTURERS);
+    }
+    
     if (PRICE_RESPONSE_COMPUTE == COMPUTE_ON_DEVICE) 
     {
       launch_device_price_response(price_strategy,
@@ -878,8 +952,10 @@ void host_equilibriate(int* price, int* loyalty,
                                    profit->yesterday,
                                    NUM_MANUFACTURERS);
       printf("Launch_device_price_response successful!\n");
-      print_int_array(price_strategy, NUM_MANUFACTURERS);
-
+      if (VERBOSE)
+      {
+        print_int_array(price_strategy, NUM_MANUFACTURERS);
+      }
     }
     else 
     {
@@ -898,7 +974,10 @@ void host_equilibriate(int* price, int* loyalty,
                                  NUM_PRODUCTS);
 
       printf("Launch_device_modify_price successful!\n");
-      print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
+      if (VERBOSE)
+      {
+        print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
+      }
     }
     else
     {
@@ -911,10 +990,11 @@ void host_equilibriate(int* price, int* loyalty,
       }
     }
     
-
-    printf("New prices (line = product):\n");
-    print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
-
+    if (VERBOSE) 
+    {
+      printf("New prices (line = product):\n");
+      print_2d_1d_int_array(price, NUM_PRODUCTS, NUM_MANUFACTURERS);
+    }
 
     // This array contains the number of picks that a consumer has made from
     // each manufacturer. The first dimension is the consumer id, and the second
@@ -941,12 +1021,15 @@ void host_equilibriate(int* price, int* loyalty,
         }
         int* counts = calculate_num_purchases(picks, NUM_CONSUMERS, NUM_MANUFACTURERS);
 
-        printf("Printing picks for each consumer.\n");
-        print_int_array(picks, NUM_CONSUMERS);
-//        printf("Number of purchases for each product:\n");
-//        print_int_array(counts, NUM_MANUFACTURERS);
+        if (VERBOSE)
+        {
+          printf("Printing picks for each consumer.\n");
+          print_int_array(picks, NUM_CONSUMERS);
+          printf("Number of purchases for each product:\n");
+          print_int_array(counts, NUM_MANUFACTURERS);
 
-//        printf("ProfitToday before prod %d: %d\n", prod_id, profit->today[0]);
+          printf("ProfitToday before prod %d: %d\n", prod_id, profit->today[0]);
+        }
       
         int* price_arr_point = &price[prod_id*NUM_MANUFACTURERS];
       
@@ -966,33 +1049,43 @@ void host_equilibriate(int* price, int* loyalty,
                                NUM_CONSUMERS,
                                NUM_PRODUCTS);
       
-      printf("Printing scores from picks.\n");
-      print_2d_1d_int_array(picks_2d, NUM_PRODUCTS, NUM_CONSUMERS);
-      
-      for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++){
-        int cheapest = get_cheapest_man(price, prod_id);
-        // Get picks for this cons out of flattened 2D array
-        int* picks = &picks_2d[prod_id*NUM_CONSUMERS];
+        if (VERBOSE)
+        {      
+          printf("Printing scores from picks.\n");
+          print_2d_1d_int_array(picks_2d, NUM_PRODUCTS, NUM_CONSUMERS);
+        }
+        
+        for (prod_id = 0; prod_id < NUM_PRODUCTS; prod_id++)
+        {
+          int cheapest = get_cheapest_man(price, prod_id);
+          // Get picks for this cons out of flattened 2D array
+          int* picks = &picks_2d[prod_id*NUM_CONSUMERS];
 
-        for (cons_id = 0; cons_id < NUM_CONSUMERS; cons_id++){
-          // Increment the number of times the consumer picked the manufacturer
-          // returned from the host_consumer_choice function
-          int new_val = val(cons_choices, cons_id, picks[cons_id], NUM_MANUFACTURERS) + 1;
+          for (cons_id = 0; cons_id < NUM_CONSUMERS; cons_id++){
+            // Increment the number of times the consumer picked the manufacturer
+            // returned from the host_consumer_choice function
+            int new_val = val(cons_choices, cons_id, picks[cons_id], NUM_MANUFACTURERS) + 1;
           set_val(cons_choices, cons_id, picks[cons_id], NUM_MANUFACTURERS, new_val);
         }
 
         int* counts = calculate_num_purchases(picks, NUM_CONSUMERS, NUM_MANUFACTURERS);
-        printf("Number of purchases for each product:\n");
-        print_int_array(counts, NUM_MANUFACTURERS);
 
-        printf("ProfitToday before prod %d: %d\n", prod_id, profit->today[0]);
-      
+        if (VERBOSE)
+        {      
+          printf("Number of purchases for each product:\n");
+          print_int_array(counts, NUM_MANUFACTURERS);
+
+          printf("ProfitToday before prod %d: %d\n", prod_id, profit->today[0]);
+        }
+        
         int* price_arr_point = &price[prod_id*NUM_MANUFACTURERS];
       
         profit_for_product(counts, profit->today, price_arr_point, marginal_cost[prod_id], NUM_MANUFACTURERS);
-        print_profit_struct(profit, NUM_MANUFACTURERS);
+        if (VERBOSE)
+        {
+          print_profit_struct(profit, NUM_MANUFACTURERS);
+        }
       }
-
     }
     
     if (UPDATE_LOYALTIES_COMPUTE == COMPUTE_ON_HOST) 
@@ -1007,9 +1100,12 @@ void host_equilibriate(int* price, int* loyalty,
                               NUM_MANUFACTURERS);
     }
     
-    printf("Loyalties:\n");
-    print_int_array(loyalty, NUM_CONSUMERS);
-
+    if (VERBOSE)
+    {      
+      printf("Loyalties:\n");
+      print_int_array(loyalty, NUM_CONSUMERS);
+    }
+    
     put_plot_line(profitFile, profit->today, NUM_MANUFACTURERS, day_num);
     int prod_to_print = 0;
     int* price_arr_point = &price[prod_to_print*NUM_MANUFACTURERS];
@@ -1019,11 +1115,10 @@ void host_equilibriate(int* price, int* loyalty,
     // swap the pointers inside the profit struct so that we can overwrite without needing to free
     swap_profit_pointers(profit, NUM_MANUFACTURERS);
 
-    printf("A new day dawns (%d).\n\n\n\n\n\n", day_num);
+    printf("A new day dawns (%d).\n\n", day_num);
   }
 
-  float loyalty_avg_update_time = (float)loyalty_update_total_millis/(float)loyalty_update_count;
-  printf("Total loyalty update time (ms): %.10f\nAverage loyalty update time (ms): %.10f\n", loyalty_update_total_millis, loyalty_avg_update_time);
+  print_timer_values();
 
   fclose(profitFile);
   fclose(priceFile);
@@ -1201,10 +1296,6 @@ int main(int argc, char** argv)
   else 
       seed = time(NULL);
   srand(seed);
-  /* int i; */
-  /* for (i = 0; i < 100; ++i) { */
-  /*   printf("%lf\n", positive_gaussrand() + 1); */
-  /* } */
 
   // Start of hard work...
   clock_t start_time = clock();
