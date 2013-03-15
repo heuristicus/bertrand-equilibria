@@ -18,20 +18,20 @@ until it completes.
 
 Important parameters which can be tweaked can be found at the top of the equilibria.cu file
 
-`NUM_CONSUMERS` - The number of consumers.
-`NUM_MANUFACTURERS` - The number of manufacturers.
-`STINGINESS_ALPHA` - Extent to which deviation from the cheapest price is penalised. Larger values result in less willingness to buy more expensive products.
-`LOYALTY_MULTIPLIER` - The score of the preferred manufacturer is multiplied by this.
-`RIPOFF_MULTIPLIER` - The proportion more than the cheapest price after which the product will never be purchased. E.g. 0.5 means we never buy products 50% more expensive than cheapest
-`BASE_MARGINAL` - Modifies the starting price of each product.
-`PRICE_INCREMENT` - Set the daily change in price by manufacturers.
-`MAX_PRICE_MULTIPLIER` - Prices of products cannot exceed this value.
+- `NUM_CONSUMERS` - The number of consumers.
+- `NUM_MANUFACTURERS` - The number of manufacturers.
+- `STINGINESS_ALPHA` - Extent to which deviation from the cheapest price is penalised. Larger values result in less willingness to buy more expensive products.
+- `LOYALTY_MULTIPLIER` - The score of the preferred manufacturer is multiplied by this.
+- `RIPOFF_MULTIPLIER` - The proportion more than the cheapest price after which the product will never be purchased. E.g. 0.5 means we never buy products 50% more expensive than cheapest
+- `BASE_MARGINAL` - Modifies the starting price of each product.
+- `PRICE_INCREMENT` - Set the daily change in price by manufacturers.
+- `MAX_PRICE_MULTIPLIER` - Prices of products cannot exceed this value.
 
 The following parameters can be set with `COMPUTE_ON_DEVICE` or `COMPUTE_ON_HOST`. Note that there are several versions of some device functions, which are commented out in the `launch_[function_name]` functions.
-`PRICE_RESPONSE_COMPUTE`
-`MODIFY_PRICE_COMPUTE`
-`UPDATE_LOYALTIES_COMPUTE`
-`CONSUMER_CHOICE_COMPUTE` - Device version of this is bugged.
+- `PRICE_RESPONSE_COMPUTE`
+- `MODIFY_PRICE_COMPUTE`
+- `UPDATE_LOYALTIES_COMPUTE`
+- `CONSUMER_CHOICE_COMPUTE` - Device version of this is bugged.
 
 Data Output
 ==================
