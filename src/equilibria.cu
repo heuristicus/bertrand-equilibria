@@ -28,14 +28,13 @@
 #define STRATEGY_UP 0
 #define STRATEGY_DOWN 1
 
-#define NUM_MANUFACTURERS 10
-#define NUM_CONSUMERS 1000
+#define NUM_MANUFACTURERS 2
+#define NUM_CONSUMERS 100
 #define MAX_MARGINAL 250
-#define BASE_INCOME 20000
 #define PRICE_INCREMENT 5
 // The price of any product cannot exceed this value multiplied by the marginal
 // cost for that product.
-#define MAX_PRICE_MULTIPLIER 5.0f 
+#define MAX_PRICE_MULTIPLIER 5.0f
 
 // The gradient/decay rate of the function used to determine
 // fitness for roulette-wheel selection, which is used to
@@ -55,12 +54,10 @@
 
 // Define the number of blocks and shared memory sizes for the device functions
 #define LOYALTY_NBLOCKS 10
-#define LOYALTY_THREADS_PER_BLOCK 100 // This needs to change if the number of customers changes
+#define LOYALTY_THREADS_PER_BLOCK NUM_CONSUMERS/LOYALTY_NBLOCKS // This needs to change if the number of customers changes
 #define LOYALTY_SHAREDSIZE LOYALTY_THREADS_PER_BLOCK*NUM_MANUFACTURERS
 
-const char* products[] = {"milk", "bread", "toilet_paper", "butter", "bacon", "cheese"};
-#define NUM_PRODUCTS 6 // DON'T FORGET TO CHANGE THIS!!!
-//int NUM_PRODUCTS = sizeof(products)/sizeof(char*);
+#define NUM_PRODUCTS 6
 
 // Arrays mapping manufacturer ID to profit on each day
 typedef struct
@@ -275,23 +272,6 @@ int select_loyalty()
   return i;
 }
 
-/*
- * Gaussian over population. Currently generates values using a gaussian tail
- * distribution - there will be a lot of people who have an income around 
- * the base income, and fewer with higher incomes.
- */
-int* init_income()
-{
-    int* income = (int*) malloc(NUM_CONSUMERS * sizeof(int));
-    
-    int i;
-    for (i = 0; i < NUM_CONSUMERS; ++i) {
-        income[i] = BASE_INCOME * (positive_gaussrand() + 1);
-        printf("Income of household %d: %d\n", i, income[i]);
-    }
-    return income;
-}
-
 // Initialise last two days of profits with fake values.
 // All profits two days ago are set to 0 and for yesterday 
 // are set to 1. Thus, all profits increase so currently
@@ -310,42 +290,6 @@ profits* init_profits()
         profit_history->yesterday[man] = 1;
     }
     return profit_history;
-}
-
-
-
-/* Generate a gaussian random value in the interval [0,infinity] */
-double positive_gaussrand()
-{
-    double r;
-    while ((r = gaussrand()) < 0);
-    return r;
-}
-
-// Polar method implementation taken from c-faq.com/lib/gaussian.html
-double gaussrand()
-{
-  static double V1, V2, S;
-  static int phase = 0;
-  double X;
-    
-  if (phase == 0){
-    do {
-      double U1 = (double)rand()/RAND_MAX;
-      double U2 = (double)rand()/RAND_MAX;
-	    
-      V1 = 2 * U1 - 1;
-      V2 = 2 * U2 - 1;
-      S = V1 * V1 + V2 * V2;
-    } while (S >= 1 || S == 0);
-    X = V1 * sqrt(-2 * log(S) / S);
-  } else {
-    X = V2 * sqrt(-2 * log(S) / S);
-  }
-
-  phase = 1 - phase;
-    
-  return X;
 }
 
 // Computes the choice made for each product by each consumer. Puts the values for each consumer into the chosen_manufacturers array,
@@ -623,9 +567,22 @@ void update_loyalties(int* choices, int* loyalties, unsigned int num_consumers,
 
 // Updates the loyalties of each customer after the purchases for the day have been made.
 // The number of threads should be the number of consumers.
+__global__ void d_update_loyalties(int* choices, int* loyalties, 
+                                   unsigned int num_manufacturers,
+                                   unsigned int num_consumers){
+    int cons_id = threadIdx.x + blockDim.x*blockIdx.x;
+
+    // Most purchased-from manufacturer
+    int* choices_subarr = &choices[cons_id*num_manufacturers];
+    loyalties[cons_id] = d_get_max_ind(choices_subarr, num_manufacturers);
+}
+
+// Updates the loyalties of each customer after the purchases for the day have been made.
+// The number of threads should be the number of consumers. Loads data from global memory
+// into shared in an attempt to speed up computation
 __global__ void d_update_loyalties_shmem(int* choices, int* loyalties, 
                                    unsigned int num_manufacturers,
-                                   unsigned int num_customers)
+                                   unsigned int num_consumers)
 {
     int cons_id = threadIdx.x + blockDim.x*blockIdx.x;
     int tid = threadIdx.x;
@@ -634,8 +591,8 @@ __global__ void d_update_loyalties_shmem(int* choices, int* loyalties,
     int global_ref = cons_id*num_manufacturers;
     int shared_ref = tid*num_manufacturers;
 
-    for (int i = 0; i < num_manufacturers; i++){
-        c_shared[shared_ref + i] = choices[global_ref + i];
+    for (int man_id = 0; man_id < num_manufacturers; man_id++){
+        c_shared[shared_ref + man_id] = choices[global_ref + man_id];
     }
     
     // Pointer to the start of the array for this consumer.
@@ -644,15 +601,35 @@ __global__ void d_update_loyalties_shmem(int* choices, int* loyalties,
     loyalties[cons_id] = d_get_max_ind(choices_subarr, num_manufacturers);
 }
 
-__global__ void d_update_loyalties(int* choices, int* loyalties, 
+// Updates the loyalties of each customer after the purchases for the day have been made.
+// The number of threads should be the number of consumers. Attempts to speed up computation
+// using memory coalescing.
+__global__ void d_update_loyalties_shmem_coop(int* choices, int* loyalties, 
                                    unsigned int num_manufacturers,
-                                   unsigned int num_customers){
+                                   unsigned int num_consumers)
+{
     int cons_id = threadIdx.x + blockDim.x*blockIdx.x;
+    int tid = threadIdx.x;
+    // This is the number of array elements that should be loaded at each stage of the cooperative loading.
+//    int shBlockSize = num_consumers/blockDim.x;
 
-    // Most purchased-from manufacturer
-    int* choices_subarr = &choices[cons_id*num_manufacturers];
+    __shared__ int c_shared[LOYALTY_SHAREDSIZE];
+    int shared_ref = tid*num_manufacturers;
+    
+    for (int man_id = 0; man_id < num_manufacturers; man_id++){
+        c_shared[blockDim.x * man_id + tid] = choices[num_consumers * man_id + cons_id];
+//        loyalties[cons_id] = c_shared[num_consumers * man_id + tid];
+//        loyalties[cons_id] = shBlockSize * man_id + tid;
+    }
+
+    __syncthreads();
+    // Pointer to the start of the array for this consumer.
+    int* choices_subarr = &c_shared[shared_ref];
+    // Get the most purchased-from manufacturer and set loyalty to it.
     loyalties[cons_id] = d_get_max_ind(choices_subarr, num_manufacturers);
 }
+
+
 
 // Performs the necessary memory allocations and conversions and launches the
 // kernel function to compute the updated loyalties.
@@ -679,7 +656,8 @@ void launch_update_loyalties(int* choices, int* loyalties,
     cutilCheckError(cutStartTimer(timer));  
 
 //    d_update_loyalties<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
-    d_update_loyalties_shmem<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
+//    d_update_loyalties_shmem<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
+    d_update_loyalties_shmem_coop<<<nblocks, nthreads>>>(dev_choices, dev_loyalty, num_manufacturers, num_consumers);
 
     cutilCheckError(cutStopTimer(timer));
     loyalty_update_total_millis += cutGetTimerValue(timer);
@@ -965,7 +943,7 @@ void host_equilibriate(int* price, int* loyalty,
 
         printf("Printing picks for each consumer.\n");
         print_int_array(picks, NUM_CONSUMERS);
-        printf("Number of purchases for each product:\n");
+//        printf("Number of purchases for each product:\n");
 //        print_int_array(counts, NUM_MANUFACTURERS);
 
 //        printf("ProfitToday before prod %d: %d\n", prod_id, profit->today[0]);
